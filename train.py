@@ -6,6 +6,8 @@ from functools import partial
 
 import wandb
 import torch
+import torch.distributed as dist
+from socket import gethostname
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 import resource
@@ -16,15 +18,20 @@ import yaml
 from utils.diffusion_utils import t_to_sigma as t_to_sigma_compl, t_to_sigma_individual
 from datasets.loader import construct_loader
 from utils.parsing import parse_train_args
-from utils.training import train_epoch, test_epoch, loss_function, inference_epoch_fix
+from utils.training import train_epoch, test_epoch, loss_function, loss_function_ddp, inference_epoch_fix
 from utils.utils import save_yaml_file, get_optimizer_and_scheduler, get_model, ExponentialMovingAverage
 
 
 def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, val_dataset2):
 
-    loss_fn = partial(loss_function, tr_weight=args.tr_weight, rot_weight=args.rot_weight,
-                      tor_weight=args.tor_weight, no_torsion=args.no_torsion, backbone_weight=args.backbone_loss_weight,
-                      sidechain_weight=args.sidechain_loss_weight)
+    if args.DDP or args.no_parallel:
+        loss_fn = partial(loss_function_ddp, tr_weight=args.tr_weight, rot_weight=args.rot_weight,
+                    tor_weight=args.tor_weight, no_torsion=args.no_torsion, backbone_weight=args.backbone_loss_weight,
+                    sidechain_weight=args.sidechain_loss_weight)
+    else:
+        loss_fn = partial(loss_function, tr_weight=args.tr_weight, rot_weight=args.rot_weight,
+                    tor_weight=args.tor_weight, no_torsion=args.no_torsion, backbone_weight=args.backbone_loss_weight,
+                    sidechain_weight=args.sidechain_loss_weight)
 
     best_val_loss = math.inf
     best_val_inference_value = math.inf if args.inference_earlystop_goal == 'min' else 0
@@ -38,8 +45,13 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
         freeze_params = args.warmup_dur * (args.num_conv_layers + 2) - 1
         print("Freezing some parameters until epoch {}".format(freeze_params))
 
-    print("Starting training...")
-    for epoch in range(args.n_epochs):
+    if args.restart_dir:
+        epoch_iter = args.n_epochs_range
+        print(f"Resuming training...Epochs {list(epoch_iter)[0]}–{list(epoch_iter)[-1]}")
+    else:
+        print("Starting training...")
+        epoch_iter = range(args.n_epochs)
+    for epoch in epoch_iter:
         if epoch % 5 == 0: print("Run name: ", args.run_name)
 
         if args.scheduler == 'layer_linear_warmup' and (epoch+1) % args.warmup_dur == 0:
@@ -57,7 +69,9 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                                                                optimizer=optimizer)
 
         logs = {}
-        train_losses = train_epoch(model, train_loader, optimizer, device, t_to_sigma, loss_fn, ema_weights if epoch > freeze_params else None)
+        train_losses = train_epoch(model, train_loader, optimizer, args.device, t_to_sigma, loss_fn, ema_weights if epoch > freeze_params else None)
+        # number of tdqm batches = len(train_dataset) / (args.batch_size)
+        
         print("Epoch {}: Training loss {:.4f}  tr {:.4f}   rot {:.4f}   tor {:.4f}   sc {:.4f}  lr {:.4f}"
               .format(epoch, train_losses['loss'], train_losses['tr_loss'], train_losses['rot_loss'],
                       train_losses['tor_loss'], train_losses['sidechain_loss'], optimizer.param_groups[0]['lr']))
@@ -65,7 +79,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
         if epoch > freeze_params:
             ema_weights.store(model.parameters())
             if args.use_ema: ema_weights.copy_to(model.parameters()) # load ema parameters into model for running validation and inference
-        val_losses = test_epoch(model, val_loader, device, t_to_sigma, loss_fn, args.test_sigma_intervals)
+        val_losses = test_epoch(model, val_loader, args.device, t_to_sigma, loss_fn, args.test_sigma_intervals)
         print("Epoch {}: Validation loss {:.4f}  tr {:.4f}   rot {:.4f}   tor {:.4f}   sc {:.4f}"
               .format(epoch, val_losses['loss'], val_losses['tr_loss'], val_losses['rot_loss'], val_losses['tor_loss'], val_losses['sidechain_loss']))
 
@@ -93,7 +107,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
 
         if epoch > freeze_params:
             if not args.use_ema: ema_weights.copy_to(model.parameters())
-            ema_state_dict = copy.deepcopy(model.module.state_dict() if device.type == 'cuda' else model.state_dict())
+            ema_state_dict = copy.deepcopy(model.module.state_dict() if device.type == 'cuda' and not (args.no_parallel or args.DDP) else model.state_dict())
             ema_weights.restore(model.parameters())
 
         if args.wandb:
@@ -102,7 +116,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
             logs['current_lr'] = optimizer.param_groups[0]['lr']
             wandb.log(logs, step=epoch + 1)
 
-        state_dict = model.module.state_dict() if device.type == 'cuda' else model.state_dict()
+        state_dict = model.module.state_dict() if device.type == 'cuda' and not (args.no_parallel or args.DDP) else model.state_dict()
         if args.inference_earlystop_metric in logs.keys() and \
                 (args.inference_earlystop_goal == 'min' and logs[args.inference_earlystop_metric] <= best_val_inference_value or
                  args.inference_earlystop_goal == 'max' and logs[args.inference_earlystop_metric] >= best_val_inference_value):
@@ -149,6 +163,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
     print("Best inference metric {} on Epoch {}".format(best_val_inference_value, best_val_inference_epoch))
 
 
+
 def main_function():
     args = parse_train_args()
     if args.config:
@@ -168,19 +183,53 @@ def main_function():
         torch.backends.cudnn.benchmark = True
 
     if args.wandb:
-        wandb.init(
-            entity='',
-            settings=wandb.Settings(start_method="fork"),
-            project=args.project,
-            name=args.run_name,
-            config=args
-        )
+        wandb_args = {
+            'entity':'eac709-nyu',
+            'settings':wandb.Settings(start_method="fork"),
+            'project':args.project,
+            'name':args.run_name,
+            'config':args,
+        }
+        if args.DDP:
+            print("DDP wandb group")
+            wandb_args.update({'group':"DDP"})
+        if args.restart_dir: 
+            print("resume wandb run")
+            wandb_args.update({
+                "id":args.wandb_id,
+                "resume":"must"
+            })
+        wandb.init(**wandb_args)
+
+    local_rank=None
+    if args.DDP:
+        world_size    = int(os.environ["WORLD_SIZE"])
+        rank          = int(os.environ["SLURM_PROCID"])
+        gpus_per_node = int(os.environ["SLURM_GPUS_ON_NODE"])
+        assert gpus_per_node == torch.cuda.device_count()
+        print(f"Hello from rank {rank} of {world_size} on {gethostname()} where there are" \
+            f" {gpus_per_node} allocated GPUs per node.", flush=True)
+        
+        print(f"Rank {rank}: Starting init_process_group", flush=True)
+        setup(rank, world_size)
+        print(f"Rank {rank}: Finished init_process_group", flush=True)
+
+        if rank == 0: print(f"Group initialized? {dist.is_initialized()}", flush=True)
+
+        local_rank = rank - gpus_per_node * (rank // gpus_per_node)
+        torch.cuda.set_device(local_rank)
+        print(f"host: {gethostname()}, rank: {rank}, local_rank: {local_rank}", flush=True)
+        device = torch.device(f'cuda:{local_rank}')
+        args.world_size=world_size
+        args.rank=rank
+    else:
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     # construct loader
     t_to_sigma = partial(t_to_sigma_compl, args=args)
-    train_loader, val_loader, val_dataset2 = construct_loader(args, t_to_sigma, device)
+    train_loader, val_loader, val_dataset2 = construct_loader(args, t_to_sigma)
     
-    model = get_model(args, device, t_to_sigma=t_to_sigma)
+    model = get_model(args, device, t_to_sigma=t_to_sigma, no_parallel=args.no_parallel)
     optimizer, scheduler = get_optimizer_and_scheduler(args, model, scheduler_mode=args.inference_earlystop_goal if args.val_inference_freq is not None else 'min')
     ema_weights = ExponentialMovingAverage(model.parameters(),decay=args.ema_rate)
 
@@ -193,6 +242,8 @@ def main_function():
             if hasattr(args, 'ema_rate'):
                 ema_weights.load_state_dict(dict['ema_weights'], device=device)
             print("Restarting from epoch", dict['epoch'])
+            assert args.n_epochs > dict['epoch']
+            args.n_epochs_range = range(dict['epoch'], args.n_epochs)
         except Exception as e:
             print("Exception", e)
             dict = torch.load(f'{args.restart_dir}/best_model.pt', map_location=torch.device('cpu'))
@@ -217,7 +268,15 @@ def main_function():
 
     train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, val_dataset2)
 
+    if args.DDP:
+        dist.destroy_process_group()
+        wandb.finish()
+
+def setup(rank, world_size):
+    # initialize the process group
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
 if __name__ == '__main__':
+    print("Using", torch.cuda.device_count(), "GPUs!")
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     main_function()

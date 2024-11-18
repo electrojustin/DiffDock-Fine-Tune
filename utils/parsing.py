@@ -32,6 +32,7 @@ def parse_train_args():
     parser.add_argument('--wandb', action='store_true', default=False, help='')
     parser.add_argument('--project', type=str, default='diffdock', help='')
     parser.add_argument('--run_name', type=str, default='', help='')
+    parser.add_argument('--wandb_id', type=str, default='', help='wandb restart id')
     parser.add_argument('--cudnn_benchmark', action='store_true', default=False, help='CUDA optimization parameter for faster training')
     parser.add_argument('--num_dataloader_workers', type=int, default=0, help='Number of workers for dataloader')
     parser.add_argument('--pin_memory', action='store_true', default=False, help='pin_memory arg of dataloader')
@@ -52,6 +53,8 @@ def parse_train_args():
     parser.add_argument('--num_workers', type=int, default=1, help='Number of workers for preprocessing')
     parser.add_argument('--use_ema', action='store_true', default=False, help='Whether or not to use ema for the model weights')
     parser.add_argument('--ema_rate', type=float, default=0.999, help='decay rate for the exponential moving average model parameters ')
+    parser.add_argument('--DDP', action='store_true', default=False, help='to use DistributedDataParallel and train on multinode GPU')
+    parser.add_argument('--no_parallel', action='store_true', default=False, help='train on one GPU')
 
     # Dataset
     parser.add_argument('--limit_complexes', type=int, default=5, help='If positive, the number of training and validation complexes is capped') # TODO change

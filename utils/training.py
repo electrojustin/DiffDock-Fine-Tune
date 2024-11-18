@@ -12,6 +12,113 @@ from utils.sampling import randomize_position, sampling
 from utils.diffusion_utils import get_t_schedule
 
 
+def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_sigma, device, tr_weight=1, rot_weight=1,
+                  tor_weight=1, backbone_weight=0, sidechain_weight=0, apply_mean=True, no_torsion=False):
+    ## the original DiffDock uses DataParallel and DataListLoader to pass in data in the form of a list
+    ## thus this code is written in the anticipation that the data will be a list
+    ## this loss_function should be rewritten to handle a HeteroDataBatch from DataLoader
+    tr_sigma, rot_sigma, tor_sigma = t_to_sigma(*[data.complex_t[noise_type] for noise_type in ['tr', 'rot', 'tor']])
+    mean_dims = (0, 1) if apply_mean else 1
+
+    # translation component
+    tr_score = data.tr_score # torch.cat([d.tr_score for d in data], dim=0) if device.type == 'cuda' else data.tr_score
+    tr_sigma = tr_sigma.unsqueeze(-1)
+    tr_loss = ((tr_pred.cpu() - tr_score.cpu()) ** 2 * tr_sigma.cpu() ** 2).mean(dim=mean_dims)
+    tr_base_loss = (tr_score ** 2 * tr_sigma ** 2).mean(dim=mean_dims).detach()
+
+    # rotation component
+    rot_score = data.rot_score
+    rot_score_norm = so3.score_norm(rot_sigma.cpu()).unsqueeze(-1)
+    rot_loss = (((rot_pred.cpu() - rot_score.cpu()) / rot_score_norm) ** 2).mean(dim=mean_dims)
+    rot_base_loss = ((rot_score.cpu() / rot_score_norm) ** 2).mean(dim=mean_dims).detach()
+
+    # torsion component
+    if not no_torsion:
+        edge_tor_sigma = torch.from_numpy(np.concatenate(data.tor_sigma_edge))
+        tor_score = data.tor_score
+        tor_score_norm2 = torch.tensor(torus.score_norm(edge_tor_sigma.cpu().numpy())).float()
+        tor_loss = ((tor_pred.cpu() - tor_score.cpu()) ** 2 / tor_score_norm2)
+        tor_base_loss = ((tor_score.cpu() ** 2 / tor_score_norm2)).detach()
+        if apply_mean:
+            tor_loss, tor_base_loss = tor_loss.mean() * torch.ones(1, dtype=torch.float), tor_base_loss.mean() * torch.ones(1, dtype=torch.float)
+        else:
+            index =  data['ligand'].batch[data['ligand', 'ligand'].edge_index[0][data['ligand'].edge_mask]]
+            num_graphs = data.num_graphs 
+            t_l, t_b_l, c = torch.zeros(num_graphs, device='cpu'), torch.zeros(num_graphs, device='cpu'), torch.zeros(num_graphs, device='cpu')
+            c.index_add_(0, index.cpu(), torch.ones(tor_loss.shape, device='cpu'))
+            c = c + 0.0001
+            t_l.index_add_(0, index.cpu(), tor_loss)
+            t_b_l.index_add_(0, index.cpu(), tor_base_loss)
+            tor_loss, tor_base_loss = t_l / c, t_b_l / c
+    else:
+        if apply_mean:
+            tor_loss, tor_base_loss = torch.zeros(1, dtype=torch.float), torch.zeros(1, dtype=torch.float)
+        else:
+            tor_loss, tor_base_loss = torch.zeros(len(rot_loss), dtype=torch.float), torch.zeros(len(rot_loss), dtype=torch.float)
+
+    if backbone_weight > 0:
+        backbone_vecs = data['receptor'].side_chain_vecs 
+        backbone_vecs = backbone_vecs[:, 4:]
+        backbone_pred = sidechain_pred[:, 4:]
+
+        backbone_base_loss = (backbone_vecs ** 2).detach().mean(dim=1) + 0.0001
+        backbone_loss = ((backbone_pred.cpu() - backbone_vecs) ** 2).mean(dim=1) / backbone_base_loss.mean()
+        backbone_base_loss = backbone_base_loss / backbone_base_loss.mean()
+        if apply_mean:
+            backbone_loss, backbone_base_loss = backbone_loss.mean() * torch.ones(1, dtype=torch.float), backbone_base_loss.mean() * torch.ones(1, dtype=torch.float)
+        else:
+            index = data['receptor'].batch
+            num_graphs = data.num_graphs
+            s_l, s_b_l, c = torch.zeros(num_graphs), torch.zeros(num_graphs), torch.zeros(num_graphs)
+            c.index_add_(0, index, torch.ones(backbone_loss.shape[0]))
+            c = c + 0.0001
+            s_l.index_add_(0, index, backbone_loss)
+            s_b_l.index_add_(0, index, backbone_base_loss)
+            backbone_loss, backbone_base_loss = s_l / c, s_b_l / c
+    else:
+        if apply_mean:
+            backbone_loss, backbone_base_loss = torch.zeros(1, dtype=torch.float), torch.zeros(1, dtype=torch.float)
+        else:
+            backbone_loss, backbone_base_loss = torch.zeros(len(rot_loss), dtype=torch.float), torch.zeros(len(rot_loss), dtype=torch.float)
+
+    if sidechain_weight > 0:
+        sidechain_vecs = data['receptor'].side_chain_vecs
+        chi_angles = sidechain_vecs[:, :4].to(device)
+        chi_pred = sidechain_pred[:, :4].to(device)
+
+        chi_pred = torch.where(torch.isnan(chi_angles), torch.zeros_like(chi_angles, device=device), chi_pred)
+        chi_angles = torch.where(torch.isnan(chi_angles), torch.zeros_like(chi_angles, device=device), chi_angles)
+
+        difference = torch.abs(chi_pred - chi_angles)
+        difference = torch.min(difference, 1 - difference) # angles are circular and 360 degrees = 1
+
+        sidechain_base_loss = (chi_angles ** 2).detach().mean(dim=1) + 0.0001
+        sidechain_loss = (difference ** 2).mean(dim=1) / sidechain_base_loss.mean()
+        sidechain_base_loss = sidechain_base_loss / sidechain_base_loss.mean()
+        if apply_mean:
+            sidechain_loss, sidechain_base_loss = \
+                sidechain_loss.mean().cpu() * torch.ones(1, dtype=torch.float), \
+                sidechain_base_loss.mean().cpu() * torch.ones(1, dtype=torch.float)
+        else:
+            index = data['receptor'].batch
+            num_graphs = data.num_graphs
+            s_l, s_b_l, c = torch.zeros(num_graphs), torch.zeros(num_graphs), torch.zeros(num_graphs)
+            c.index_add_(0, index, torch.ones(sidechain_loss.shape[0]))
+            c = c + 0.0001
+            s_l.index_add_(0, index, sidechain_loss.cpu())
+            s_b_l.index_add_(0, index, sidechain_base_loss.cpu())
+            sidechain_loss, sidechain_base_loss = s_l / c, s_b_l / c
+    else:
+        if apply_mean:
+            sidechain_loss, sidechain_base_loss = torch.zeros(1, dtype=torch.float), torch.zeros(1, dtype=torch.float)
+        else:
+            sidechain_loss, sidechain_base_loss = torch.zeros(len(rot_loss), dtype=torch.float), torch.zeros(
+                len(rot_loss), dtype=torch.float)
+
+    loss = tr_loss * tr_weight + rot_loss * rot_weight + tor_loss * tor_weight + sidechain_loss * sidechain_weight + backbone_loss * backbone_weight
+    return loss, tr_loss.detach(), rot_loss.detach(), tor_loss.detach(), backbone_loss.detach(), sidechain_loss.detach(), \
+           tr_base_loss, rot_base_loss, tor_base_loss, backbone_base_loss, sidechain_base_loss
+
 def loss_function(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_sigma, device, tr_weight=1, rot_weight=1,
                   tor_weight=1, backbone_weight=0, sidechain_weight=0, apply_mean=True, no_torsion=False):
     tr_sigma, rot_sigma, tor_sigma = t_to_sigma(
@@ -162,11 +269,17 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
                           'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'])
 
     for data in tqdm(loader, total=len(loader)):
-        if device.type == 'cuda' and len(data) == 1 or device.type == 'cpu' and data.num_graphs == 1:
-            print("Skipping batch of size 1 since otherwise batchnorm would not work.")
-            continue
+        if isinstance(data, list):
+            ## is data is passed in as list -> then the model is a DataParallel model
+            if device.type == 'cuda' and len(data) == 1 or device.type == 'cpu' and data.num_graphs == 1:
+                print("Skipping batch of size 1 since otherwise batchnorm would not work.")
+                continue
+            data = [d.to(device) for d in data] if device.type == 'cuda' else data
+        else:
+            ## else it is a regular model/DistributedDataParallel model
+            data = data.to(device)
         optimizer.zero_grad()
-        data = [d.to(device) for d in data] if device.type == 'cuda' else data
+
         try:
             tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
             loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, device=device)
@@ -218,9 +331,9 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
             ['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
              'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'],
             unpooled_metrics=True, intervals=10)
-
     for data in tqdm(loader, total=len(loader)):
         try:
+            data = data.to(device)
             with torch.no_grad():
                 tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
             loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, apply_mean=False, device=device)
@@ -279,7 +392,7 @@ def inference_epoch_fix(model, complex_graphs, device, t_to_sigma, args):
         failed_convergence_counter = 0
         while predictions_list == None:
             try:
-                predictions_list, confidences = sampling(data_list=data_list, model=model.module if device.type == 'cuda' else model,
+                predictions_list, confidences = sampling(data_list=data_list, model=model.module if device.type == 'cuda' and not (args.no_parallel or args.DDP) else model,
                                                          inference_steps=args.inference_steps,
                                                          tr_schedule=tr_schedule, rot_schedule=rot_schedule,
                                                          tor_schedule=tor_schedule,

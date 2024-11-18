@@ -12,13 +12,14 @@ from rdkit import Chem
 from rdkit.Chem import RemoveHs, MolToPDBFile
 from torch import nn, Tensor
 from torch_geometric.nn.data_parallel import DataParallel
+from torch.nn.parallel import DistributedDataParallel
 from torch_geometric.utils import degree, subgraph
-
 from models.aa_model import AAModel
 from models.cg_model import CGModel
 from models.old_aa_model import AAOldModel
 from models.old_cg_model import CGOldModel
 from utils.diffusion_utils import get_timestep_embedding
+
 
 
 def get_obrmsd(mol1_path, mol2_path, cache_name=None):
@@ -275,9 +276,20 @@ def get_model(args, device, t_to_sigma, no_parallel=False, confidence_mode=False
                                            (hasattr(args, 'backbone_loss_weight') and args.backbone_loss_weight > 0),
                             depthwise_convolution=args.depthwise_convolution if hasattr(args, 'depthwise_convolution') else False)
 
-    if device.type == 'cuda' and not no_parallel and ('dataset' not in args or not args.dataset == 'torsional'):
-        model = DataParallel(model)
-    model.to(device)
+    if args.DDP:
+        ## when this flag is on, local_rank gets stored as device 
+        print(f"Training with DistributedDataParallel on rank {torch.distributed.get_rank()} ({device})")
+        model = model.to(device)
+        ddp = DistributedDataParallel(model, device_ids=[device],  find_unused_parameters=True)
+        return ddp
+    else:
+        if device.type == 'cuda' and not no_parallel and ('dataset' not in args or not args.dataset == 'torsional'):
+            print("Training with DataParallel")
+            model = DataParallel(model)
+            model.to(device)
+        else:
+            model.to(device)
+
     return model
 
 import signal
