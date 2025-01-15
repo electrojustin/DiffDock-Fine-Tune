@@ -1,7 +1,11 @@
+import traceback
 import copy
 import os
 import torch
 import sys
+import threading
+import queue
+import time
 from datasets.moad import MOAD
 from utils.gnina_utils import get_gnina_poses
 from utils.molecules_utils import get_symmetry_rmsd
@@ -215,7 +219,7 @@ if __name__ == '__main__':
             # if the confidence model uses the same type of data as the original model then we do not need this dataset and can just use the complexes
             print('HAPPENING | confidence model uses different type of graphs than the score model. Loading (or creating if not existing) the data for the confidence model now.')
             confidence_test_dataset = get_dataset(args, confidence_args, confidence=True)
-            confidence_complex_dict = {d.name: d for d in confidence_test_dataset}
+#            confidence_complex_dict = {d.name: d for d in confidence_test_dataset}
 
     t_to_sigma = partial(t_to_sigma_compl, args=score_model_args)
 
@@ -319,14 +323,17 @@ if __name__ == '__main__':
         # key is complex_name, value is the gnina metrics for all samples
         gnina_metrics = {}
 
-    for idx, orig_complex_graph in tqdm(enumerate(test_loader)):
+    failures = 0
+    skipped = 0
+
+    def run_model(idx, orig_complex_graph, confidence_graph):
+        global failures
+        global skipped
+
+        orig_complex_graph = next(iter(DataLoader([orig_complex_graph], batch_size=1, shuffle=False)))
+
         torch.cuda.empty_cache()
 
-        if confidence_model is not None and not (confidence_args.use_original_model_cache or confidence_args.transfer_weights) \
-                and orig_complex_graph.name[0] not in confidence_complex_dict.keys():
-            skipped += 1
-            print(f"HAPPENING | The confidence dataset did not contain {orig_complex_graph.name[0]}. We are skipping this complex.")
-            continue
         success = 0
         bs = args.batch_size
         while 0 >= success > -args.limit_failures:
@@ -360,8 +367,7 @@ if __name__ == '__main__':
                 if not args.no_model:
                     if confidence_model is not None and not (
                             confidence_args.use_original_model_cache or confidence_args.transfer_weights):
-                        confidence_data_list = [copy.deepcopy(confidence_complex_dict[orig_complex_graph.name[0]]) for _ in
-                                               range(N)]
+                        confidence_data_list = [confidence_graph for _ in range(N)]
                     else:
                         confidence_data_list = None 
 
@@ -395,9 +401,8 @@ if __name__ == '__main__':
                         orig_ligand_pos = np.array([pos[filterHs] - orig_complex_graph.original_center.cpu().numpy() for pos in orig_complex_graph['ligand'].orig_pos[0]])
                     else:
                         orig_ligand_pos = np.array([pos[filterHs] - orig_complex_graph.original_center.cpu().numpy() for pos in [orig_complex_graph['ligand'].orig_pos[0]]])
-                    print('Found ', len(orig_ligand_pos), ' ground truth poses')
+                    print('Found ', len(orig_ligand_pos), ' ground truth poses', flush = True)
                 else:
-                    print('default path')
                     orig_ligand_pos = np.expand_dims(
                         orig_complex_graph['ligand'].orig_pos[filterHs] - orig_complex_graph.original_center.cpu().numpy(),
                         axis=0)
@@ -407,7 +412,7 @@ if __name__ == '__main__':
 
                 # Use gnina to minimize energy for predicted ligands.
                 if args.gnina_minimize:
-                    print('Running gnina on all predicted ligand positions for energy minimization.')
+                    print('Running gnina on all predicted ligand positions for energy minimization.', flush = True)
                     gnina_rmsds, gnina_scores = [], []
                     lig = copy.deepcopy(orig_complex_graph.mol[0])
                     positions = np.asarray([complex_graph['ligand'].pos.cpu().numpy() for complex_graph in data_list])
@@ -432,7 +437,7 @@ if __name__ == '__main__':
                             try:
                                 rmsd = get_symmetry_rmsd(mol, orig_ligand_pos[i], gnina_ligand_pos, gnina_mol)
                             except Exception as e:
-                                print("Using non corrected RMSD because of the error:", e)
+                                print("Using non corrected RMSD because of the error:", e, flush = True)
                                 rmsd = np.sqrt(((gnina_ligand_pos - orig_ligand_pos[i]) ** 2).sum(axis=1).mean(axis=0))
                             rmsds.append(rmsd)
                         rmsds = np.asarray(rmsds)
@@ -452,7 +457,7 @@ if __name__ == '__main__':
                     try:
                         rmsd = get_symmetry_rmsd(mol, orig_ligand_pos[i], [l for l in ligand_pos])
                     except Exception as e:
-                        print("Using non corrected RMSD because of the error:", e)
+                        print("Using non corrected RMSD because of the error:", e, flush = True)
                         rmsd = np.sqrt(((ligand_pos - orig_ligand_pos[i]) ** 2).sum(axis=2).mean(axis=1))
                     rmsds.append(rmsd)
                 rmsds = np.asarray(rmsds)
@@ -468,11 +473,11 @@ if __name__ == '__main__':
                     re_order = np.argsort(confidence)[::-1]
                     print(orig_complex_graph['name'], ' rmsd', np.around(rmsd, 1)[re_order], ' centroid distance',
                           np.around(centroid_distance, 1)[re_order], ' confidences ', np.around(confidence, 4)[re_order],
-                          (' gnina rmsd ' + str(np.around(gnina_rmsds, 1))) if args.gnina_minimize else '')
+                          (' gnina rmsd ' + str(np.around(gnina_rmsds, 1))) if args.gnina_minimize else '', flush = True)
                     confidences_list.append(confidence)
                 else:
                     print(orig_complex_graph['name'], ' rmsd', np.around(rmsd, 1), ' centroid distance',
-                          np.around(centroid_distance, 1))
+                          np.around(centroid_distance, 1), flush = True)
                 centroid_distances_list.append(centroid_distance)
 
                 self_distances = np.linalg.norm(ligand_pos[:, :, None, :] - ligand_pos[:, None, :, :], axis=-1)
@@ -496,7 +501,8 @@ if __name__ == '__main__':
                 rmsds_list.append(rmsd)
                 success = 1
             except Exception as e:
-                print("Failed on", orig_complex_graph["name"], e)
+                print("Failed on", orig_complex_graph["name"], e, flush = True)
+                print(traceback.format_exc(), flush = True)
                 exc_type, exc_obj, exc_tb = sys.exc_info()
                 fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
                 print(exc_type, fname, exc_tb.tb_lineno)
@@ -514,6 +520,39 @@ if __name__ == '__main__':
             without_train_overlap_list.append(1 if orig_complex_graph.name[0] in names_no_train_overlap else 0)
             names_list.append(orig_complex_graph.name[0])
             failures += 1
+
+    q = queue.Queue()
+    def worker():
+        global skipped
+        for idx, orig_complex_graph in enumerate(test_dataset):
+            if not orig_complex_graph:
+                skipped += 1
+                continue
+            confidence_graph = confidence_test_dataset.get_by_name(orig_complex_graph.name)
+            if confidence_model and not confidence_graph and not (confidence_args.use_original_model_cache or confidence_args.transfer_weights):
+                print(f"HAPPENING | The confidence dataset did not contain {orig_complex_graph.name[0]}. We are skipping this complex.", flush = True)
+                skipped += 1
+                continue
+            print('Queuing ' + str(idx) + ' at time: ' + str(time.time()), flush = True)
+            q.put((idx, orig_complex_graph, confidence_graph))
+
+            # We want to throttle the preprocessing thread to give more cpu time to the main thread.
+            # Tune this value based on how deep we see the queue getting
+            time.sleep(8)
+
+        q.shutdown()
+
+    thread = threading.Thread(target=worker, daemon=True).start()
+
+    while True:
+        try:
+            idx, orig_complex_graph, confidence_graph = q.get()
+            print('Processing ' + str(idx) + ' at time: ' + str(time.time()), flush = True)
+        except:
+            break
+        run_model(idx, orig_complex_graph, confidence_graph)
+        q.task_done()
+    thread.join()
 
     print('Performance without hydrogens included in the loss')
     print(failures, "failures due to exceptions")
