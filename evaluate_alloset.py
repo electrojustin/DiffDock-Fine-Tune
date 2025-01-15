@@ -3,8 +3,6 @@ import copy
 import os
 import torch
 import sys
-import threading
-import queue
 import time
 from datasets.moad import MOAD
 from utils.gnina_utils import get_gnina_poses
@@ -26,7 +24,8 @@ from rdkit import RDLogger
 from torch_geometric.loader import DataLoader
 from rdkit.Chem import RemoveAllHs
 
-from datasets.alloset import AlloSet
+from datasets.lazy_pdbbind import LazyPDBBindSet
+from datasets.background_loader import BackgroundLoader
 from utils.diffusion_utils import t_to_sigma as t_to_sigma_compl, get_t_schedule
 from utils.sampling import randomize_position, sampling
 from utils.utils import get_model, ExponentialMovingAverage, read_strings_from_txt
@@ -39,7 +38,7 @@ import pickle
 
 
 def get_dataset(args, model_args, confidence=False):
-    dataset = AlloSet(transform=None, root=args.data_dir, limit_complexes=args.limit_complexes, dataset=args.dataset,
+    dataset = LazyPDBBindSet(transform=None, root=args.data_dir, limit_complexes=args.limit_complexes, dataset=args.dataset,
                     chain_cutoff=args.chain_cutoff,
                     receptor_radius=model_args.receptor_radius,
                     cache_path=args.cache_path, split_path=args.split_path,
@@ -56,6 +55,9 @@ def get_dataset(args, model_args, confidence=False):
                     num_workers=args.num_workers,
                     protein_file=args.protein_file,
                     ligand_file=args.ligand_file,
+                    smile_file=args.smile_file,
+                    slurm_array_idx=args.slurm_array_idx,
+                    slurm_array_task_count=args.slurm_array_task_count,
                     knn_only_graph=True if not hasattr(args, 'not_knn_only_graph') else not args.not_knn_only_graph,
                     include_miscellaneous_atoms=False if not hasattr(args,'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
                     num_conformers=args.samples_per_complex if args.resample_rdkit and not confidence else 1)
@@ -76,6 +78,8 @@ if __name__ == '__main__':
     parser.add_argument('--project', type=str, default='ligbind_inf', help='')
     parser.add_argument('--out_dir', type=str, default=None, help='Where to save results to')
     parser.add_argument('--batch_size', type=int, default=40, help='Number of poses to sample in parallel')
+    parser.add_argument('--slurm_array_idx', type=int, default=None)
+    parser.add_argument('--slurm_array_task_count', type=int, default=None)
 
     parser.add_argument('--old_score_model', action='store_true', default=False, help='')
     parser.add_argument('--old_confidence_model', action='store_true', default=True, help='')
@@ -119,6 +123,7 @@ if __name__ == '__main__':
     parser.add_argument('--protein_file', type=str, default='protein_processed', help='')
     parser.add_argument('--unroll_clusters', action='store_true', default=True, help='')
     parser.add_argument('--ligand_file', type=str, default='ligand', help='')
+    parser.add_argument('--smile_file', type=str, default=None, help='')
     parser.add_argument('--remove_pdbbind', action='store_true', default=False, help='')
     parser.add_argument('--split', type=str, default='val', help='')
     parser.add_argument('--limit_failures', type=float, default=5, help='')
@@ -213,7 +218,6 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"DiffDock will run on {device}")
     test_dataset = get_dataset(args, score_model_args)
-    test_loader = DataLoader(dataset=test_dataset, batch_size=1, shuffle=False)
     if args.confidence_model_dir is not None:
         if not (confidence_args.use_original_model_cache or confidence_args.transfer_weights):
             # if the confidence model uses the same type of data as the original model then we do not need this dataset and can just use the complexes
@@ -326,12 +330,9 @@ if __name__ == '__main__':
     failures = 0
     skipped = 0
 
-    def run_model(idx, orig_complex_graph, confidence_graph):
-        global failures
-        global skipped
+    background_loader = BackgroundLoader(test_dataset, confidence_test_dataset, 1)
 
-        orig_complex_graph = next(iter(DataLoader([orig_complex_graph], batch_size=1, shuffle=False)))
-
+    for orig_complex_graph, confidence_graph in background_loader:
         torch.cuda.empty_cache()
 
         success = 0
@@ -520,39 +521,6 @@ if __name__ == '__main__':
             without_train_overlap_list.append(1 if orig_complex_graph.name[0] in names_no_train_overlap else 0)
             names_list.append(orig_complex_graph.name[0])
             failures += 1
-
-    q = queue.Queue()
-    def worker():
-        global skipped
-        for idx, orig_complex_graph in enumerate(test_dataset):
-            if not orig_complex_graph:
-                skipped += 1
-                continue
-            confidence_graph = confidence_test_dataset.get_by_name(orig_complex_graph.name)
-            if confidence_model and not confidence_graph and not (confidence_args.use_original_model_cache or confidence_args.transfer_weights):
-                print(f"HAPPENING | The confidence dataset did not contain {orig_complex_graph.name[0]}. We are skipping this complex.", flush = True)
-                skipped += 1
-                continue
-            print('Queuing ' + str(idx) + ' at time: ' + str(time.time()), flush = True)
-            q.put((idx, orig_complex_graph, confidence_graph))
-
-            # We want to throttle the preprocessing thread to give more cpu time to the main thread.
-            # Tune this value based on how deep we see the queue getting
-            time.sleep(8)
-
-        q.shutdown()
-
-    thread = threading.Thread(target=worker, daemon=True).start()
-
-    while True:
-        try:
-            idx, orig_complex_graph, confidence_graph = q.get()
-            print('Processing ' + str(idx) + ' at time: ' + str(time.time()), flush = True)
-        except:
-            break
-        run_model(idx, orig_complex_graph, confidence_graph)
-        q.task_done()
-    thread.join()
 
     print('Performance without hydrogens included in the loss')
     print(failures, "failures due to exceptions")

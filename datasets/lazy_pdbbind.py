@@ -1,5 +1,6 @@
 import binascii
 import glob
+import math
 import os
 import pickle
 from collections import defaultdict
@@ -22,19 +23,25 @@ from utils.utils import read_strings_from_txt, crop_beyond
 from utils import so3, torus
 
 
-class AlloSet(Dataset):
+class LazyPDBBindSet(Dataset):
     def __init__(self, root, transform=None, cache_path='data/cache', split_path='data/', limit_complexes=0, chain_cutoff=10,
                  receptor_radius=30, num_workers=1, c_alpha_max_neighbors=None, popsize=15, maxiter=15,
                  matching=True, keep_original=False, max_lig_size=None, remove_hs=False, num_conformers=1, all_atoms=False,
                  atom_radius=5, atom_max_neighbors=None, esm_embeddings_path=None, require_ligand=False,
                  include_miscellaneous_atoms=False,
                  protein_path_list=None, ligand_descriptions=None, keep_local_structures=False,
-                 protein_file="protein_processed", ligand_file=None,
+                 protein_file="protein_processed", ligand_file='ligand',
+                 smile_file=None,
+                 slurm_array_idx=None,
+                 slurm_array_task_count=None,
                  knn_only_graph=False, matching_tries=1, dataset='AlloSet'):
 
-        super(AlloSet, self).__init__(root, transform)
+        super(LazyPDBBindSet, self).__init__(root, transform)
+        self.smile_file = smile_file
         self.ligand_smiles = {}
-        self.alloset_dir = root
+        self.slurm_array_idx = slurm_array_idx
+        self.slurm_array_task_count = slurm_array_task_count
+        self.pdbbind_dir = root
         self.include_miscellaneous_atoms = include_miscellaneous_atoms
         self.max_lig_size = max_lig_size
         self.split_path = split_path
@@ -113,14 +120,22 @@ class AlloSet(Dataset):
         return complex_graph
 
     def preprocessing(self):
-        with open(self.ligand_file, 'r') as ligand_file:
-            for row in ligand_file.readlines():
-                parsed_row = row.split('\t')
-                self.ligand_smiles[(parsed_row[0], parsed_row[1])] = parsed_row[2].strip()
+        if self.smile_file:
+            with open(self.smile_file, 'r') as smile_file:
+                for row in smile_file.readlines():
+                    parsed_row = row.split('\t')
+                    self.ligand_smiles[(parsed_row[0].upper(), parsed_row[1].upper())] = parsed_row[2].strip()
 
         self.complex_names_all = read_strings_from_txt(self.split_path)
-        if self.limit_complexes is not None and self.limit_complexes != 0:
-            self.complex_names_all = complex_names_all[:self.limit_complexes]
+        if self.slurm_array_idx and self.slurm_array_task_count:
+            slurm_task_size = int(math.ceil(len(self.complex_names_all) / self.slurm_array_task_count))
+            start_idx = self.slurm_array_idx * slurm_task_size
+            end_idx = min(len(self.complex_names_all), (self.slurm_array_idx + 1) * slurm_task_size)
+            self.complex_names_all = self.complex_names_all[start_idx:end_idx]
+            print('Processing complexes ' + str(start_idx) + ' through ' + str(end_idx))
+        else:
+            if self.limit_complexes is not None and self.limit_complexes != 0:
+                self.complex_names_all = complex_names_all[:self.limit_complexes]
         # generate embeddings for all of the complexes up front
         # load only the embeddings specific to the test set
         if self.esm_embeddings_path is not None:
@@ -146,7 +161,7 @@ class AlloSet(Dataset):
             self.complex_lm_embeddings[self.complex_names_all[i]] = self.lm_embeddings_chains_all[i]
 
     def get_complex(self, name, lm_embedding_chains):
-        if not os.path.exists(os.path.join(self.alloset_dir, name)) and ligand is None:
+        if not os.path.exists(os.path.join(self.pdbbind_dir, name)):
             print("Folder not found", name)
             return None, None,
 
@@ -154,9 +169,21 @@ class AlloSet(Dataset):
             parsed_name = name.split('_')
             pdb = parsed_name[0]
             lig_name = parsed_name[2]
-            lig_smiles = self.ligand_smiles[(pdb.upper(), lig_name.upper())]
-            lig = Chem.MolFromSmiles(lig_smiles)
-            generate_conformer(lig)
+            orig_lig_pos = None
+            if self.ligand_smiles and (pdb.upper(), lig_name.upper()) in self.ligand_smiles:
+                lig_smiles = self.ligand_smiles[(pdb.upper(), lig_name.upper())]
+                lig = Chem.MolFromSmiles(lig_smiles)
+                generate_conformer(lig)
+                Chem.SanitizeMol(lig)
+                lig = Chem.RemoveHs(lig, sanitize=True)
+                orig_lig_pos = read_mol(self.pdbbind_dir, name, pdb, suffix=self.ligand_file, remove_hs=True).GetConformers()[0].GetPositions()
+                if orig_lig_pos is None:
+                    print('Error loading ligand original atom positions')
+                    return None, None
+            else:
+                lig = read_mol(self.pdbbind_dir, name, pdb, suffix=self.ligand_file, remove_hs=False)
+
+
             if self.max_lig_size != None and lig.GetNumHeavyAtoms() > self.max_lig_size:
                 print(f'Ligand with {lig.GetNumHeavyAtoms()} heavy atoms is larger than max_lig_size {self.max_lig_size}. Not including {name} in preprocessed data.')
                 return None, None
@@ -165,7 +192,7 @@ class AlloSet(Dataset):
             get_lig_graph_with_matching(lig, complex_graph, self.popsize, self.maxiter, self.matching, self.keep_original,
                                         self.num_conformers, remove_hs=self.remove_hs, tries=self.matching_tries)
 
-            moad_extract_receptor_structure(path=os.path.join(self.alloset_dir, name, f'{pdb}_{self.protein_file}.pdb'),
+            moad_extract_receptor_structure(path=os.path.join(self.pdbbind_dir, name, f'{pdb}_{self.protein_file}.pdb'),
                                             complex_graph=complex_graph,
                                             neighbor_cutoff=self.receptor_radius,
                                             max_neighbors=self.c_alpha_max_neighbors,
@@ -174,6 +201,8 @@ class AlloSet(Dataset):
                                             all_atoms=self.all_atoms,
                                             atom_cutoff=self.atom_radius,
                                             atom_max_neighbors=self.atom_max_neighbors)
+            if orig_lig_pos is not None:
+                complex_graph['ligand'].orig_pos = orig_lig_pos
 
         except Exception as e:
             print(f'Skipping {name} because of the error:')
@@ -194,3 +223,17 @@ class AlloSet(Dataset):
         complex_graph.original_center = protein_center
         complex_graph['receptor_name'] = name
         return complex_graph, lig
+
+def read_mol(pdbbind_dir, complex_name, pdb_name, suffix='ligand', remove_hs=False):
+    try:
+        lig = read_molecule(os.path.join(pdbbind_dir, complex_name, f'{pdb_name}_{suffix}.sdf'), remove_hs=remove_hs, sanitize=True)
+    except:
+        lig = None
+    if lig is None:  # read mol2 file if sdf file cannot be sanitized
+        try:
+            lig = read_molecule(os.path.join(pdbbind_dir, complex_name, f'{pdb_name}_{suffix}.mol2'), remove_hs=remove_hs, sanitize=True)
+        except:
+            lig = None
+    if lig is None:  # read pdb file if neither sdf nor mol2 can be sanitized
+        lig = read_molecule(os.path.join(pdbbind_dir, complex_name, f'{pdb_name}_{suffix}.pdb'), remove_hs=remove_hs, sanitize=True)
+    return lig
