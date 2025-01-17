@@ -184,8 +184,10 @@ class LazyPDBBindSet(Dataset):
                 # results since the centroid averages the atom positions anyway.
                 # We can fix the RMSD by using the canonical SMILE ordering to
                 # appropriately match up the coordinates.
+                Chem.MolToSmiles(lig, canonical=True)
                 lig_canon_atom_idx = list(lig.GetPropsAsDict(includePrivate=True, includeComputed=True)['_smilesAtomOutputOrder'])
                 orig_lig = read_mol(self.pdbbind_dir, name, pdb, suffix=self.ligand_file, remove_hs=True)
+                Chem.MolToSmiles(orig_lig, canonical=True)
                 orig_lig_canon_atom_idx = list(orig_lig.GetPropsAsDict(includePrivate=True, includeComputed=True)['_smilesAtomOutputOrder'])
                 orig_lig_pos = np.array(orig_lig.GetConformers()[0].GetPositions())
                 orig_lig_pos[lig_canon_atom_idx] = orig_lig_pos[orig_lig_canon_atom_idx]
