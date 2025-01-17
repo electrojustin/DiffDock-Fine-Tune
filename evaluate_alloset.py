@@ -563,14 +563,17 @@ if __name__ == '__main__':
             names = np.array(names_list)
 
         run_times = np.array(run_times)
-        np.save(f'{args.out_dir}/{overlap}min_self_distances.npy', min_self_distances)
-        np.save(f'{args.out_dir}/{overlap}rmsds.npy', rmsds)
-        np.save(f'{args.out_dir}/{overlap}centroid_distances.npy', centroid_distances)
-        np.save(f'{args.out_dir}/{overlap}confidences.npy', confidences)
-        np.save(f'{args.out_dir}/{overlap}run_times.npy', run_times)
-        np.save(f'{args.out_dir}/{overlap}complex_names.npy', np.array(names))
-        np.save(f'{args.out_dir}/{overlap}gnina_rmsds.npy', gnina_rmsds)
-        np.save(f'{args.out_dir}/{overlap}gnina_score.npy', gnina_score)
+        run_suffix = ''
+        if args.slurm_array_task_count:
+            run_suffix = '_' + str(args.slurm_array_idx)
+        np.save(f'{args.out_dir}/{overlap}min_self_distances{run_suffix}.npy', min_self_distances)
+        np.save(f'{args.out_dir}/{overlap}rmsds{run_suffix}.npy', rmsds)
+        np.save(f'{args.out_dir}/{overlap}centroid_distances{run_suffix}.npy', centroid_distances)
+        np.save(f'{args.out_dir}/{overlap}confidences{run_suffix}.npy', confidences)
+        np.save(f'{args.out_dir}/{overlap}run_times{run_suffix}.npy', run_times)
+        np.save(f'{args.out_dir}/{overlap}complex_names{run_suffix}.npy', np.array(names))
+        np.save(f'{args.out_dir}/{overlap}gnina_rmsds{run_suffix}.npy', gnina_rmsds)
+        np.save(f'{args.out_dir}/{overlap}gnina_score{run_suffix}.npy', gnina_score)
 
         performance_metrics.update({
             f'{overlap}run_times_std': run_times.std().__round__(2),

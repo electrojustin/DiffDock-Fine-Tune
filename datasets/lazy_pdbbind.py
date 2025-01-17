@@ -1,4 +1,5 @@
 import binascii
+import traceback
 import glob
 import math
 import os
@@ -127,7 +128,7 @@ class LazyPDBBindSet(Dataset):
                     self.ligand_smiles[(parsed_row[0].upper(), parsed_row[1].upper())] = parsed_row[2].strip()
 
         self.complex_names_all = read_strings_from_txt(self.split_path)
-        if self.slurm_array_idx and self.slurm_array_task_count:
+        if self.slurm_array_task_count:
             slurm_task_size = int(math.ceil(len(self.complex_names_all) / self.slurm_array_task_count))
             start_idx = self.slurm_array_idx * slurm_task_size
             end_idx = min(len(self.complex_names_all), (self.slurm_array_idx + 1) * slurm_task_size)
@@ -176,7 +177,18 @@ class LazyPDBBindSet(Dataset):
                 generate_conformer(lig)
                 Chem.SanitizeMol(lig)
                 lig = Chem.RemoveHs(lig, sanitize=True)
-                orig_lig_pos = read_mol(self.pdbbind_dir, name, pdb, suffix=self.ligand_file, remove_hs=True).GetConformers()[0].GetPositions()
+
+                # The SMILE string ligand and its original PDB don't
+                # necessarily load the atoms in the same order. This results in
+                # unusually high RMSD results, but normal centroid distance
+                # results since the centroid averages the atom positions anyway.
+                # We can fix the RMSD by using the canonical SMILE ordering to
+                # appropriately match up the coordinates.
+                lig_canon_atom_idx = list(lig.GetPropsAsDict(includePrivate=True, includeComputed=True)['_smilesAtomOutputOrder'])
+                orig_lig = read_mol(self.pdbbind_dir, name, pdb, suffix=self.ligand_file, remove_hs=True)
+                orig_lig_canon_atom_idx = list(orig_lig.GetPropsAsDict(includePrivate=True, includeComputed=True)['_smilesAtomOutputOrder'])
+                orig_lig_pos = np.array(orig_lig.GetConformers()[0].GetPositions())
+                orig_lig_pos[lig_canon_atom_idx] = orig_lig_pos[orig_lig_canon_atom_idx]
                 if orig_lig_pos is None:
                     print('Error loading ligand original atom positions')
                     return None, None
@@ -207,6 +219,7 @@ class LazyPDBBindSet(Dataset):
         except Exception as e:
             print(f'Skipping {name} because of the error:')
             print(e)
+            traceback.print_exc()
             return None, None
 
         protein_center = torch.mean(complex_graph['receptor'].pos, dim=0, keepdim=True)
