@@ -7,6 +7,19 @@ from datasets.pdb import PDBSidechain
 from datasets.pdbbind import NoiseTransform, PDBBind
 from utils.utils import read_strings_from_txt
 
+class CombineLazyPDBBind(Dataset):
+    def __init__(self, complex_graphs, confidence_complex_graphs):
+        super(CombineLazyPDBBind, self).__init__()
+        self.complex_graphs = complex_graphs
+        self.confidence_complex_graphs = confidence_complex_graphs
+
+    def len(self):
+        return self.complex_graphs.len()
+
+    def get(self, idx):
+        complex_graph = self.complex_graphs.get(idx)
+        confidence_graph = self.confidence_complex_graphs.get_by_name(complex_graph.name)
+        return (complex_graph, confidence_graph)
 
 class CombineDatasets(Dataset):
     def __init__(self, dataset1, dataset2):

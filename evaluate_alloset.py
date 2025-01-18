@@ -21,11 +21,12 @@ from functools import partial
 import numpy as np
 # import wandb
 from rdkit import RDLogger
-from torch_geometric.loader import DataLoader
+from torch_geometric.loader import DataLoader as GeometricDataLoader
 from rdkit.Chem import RemoveAllHs
 
 from datasets.lazy_pdbbind import LazyPDBBindSet
-from datasets.background_loader import BackgroundLoader
+from datasets.loader import CombineLazyPDBBind
+from torch.utils.data import DataLoader
 from utils.diffusion_utils import t_to_sigma as t_to_sigma_compl, get_t_schedule
 from utils.sampling import randomize_position, sampling
 from utils.utils import get_model, ExponentialMovingAverage, read_strings_from_txt
@@ -330,9 +331,18 @@ if __name__ == '__main__':
     failures = 0
     skipped = 0
 
-    background_loader = BackgroundLoader(test_dataset, confidence_test_dataset, 1)
+    combined_datasets = CombineLazyPDBBind(test_dataset, confidence_test_dataset)
+    loader = DataLoader(combined_datasets, batch_size=1, num_workers=1, collate_fn=lambda batch: [x for x in batch if x is not None])
 
-    for orig_complex_graph, confidence_graph in background_loader:
+    for batch in loader:
+        if not batch:
+            continue
+        _orig_complex_graph, _confidence_graph = batch[0]
+        if not _orig_complex_graph or not _confidence_graph:
+            continue
+        orig_complex_graph = next(iter(GeometricDataLoader([_orig_complex_graph], batch_size=len(_orig_complex_graph))))
+        confidence_graph = next(iter(GeometricDataLoader([_confidence_graph], batch_size=len(_confidence_graph))))
+
         torch.cuda.empty_cache()
 
         success = 0
