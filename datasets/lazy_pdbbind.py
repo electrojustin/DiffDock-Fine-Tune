@@ -6,6 +6,7 @@ import os
 import pickle
 from collections import defaultdict
 from multiprocessing import Pool
+from pathlib import Path
 import random
 import copy
 import torch.nn.functional as F
@@ -87,6 +88,7 @@ class LazyPDBBindSet(Dataset):
                                             + ('' if not self.include_miscellaneous_atoms else '_miscAtoms')
                                             + ('' if self.use_old_wrong_embedding_order else '_chainOrd')
                                             + ('' if self.matching_tries == 1 else f'_tries{matching_tries}'))
+        os.makedirs(self.full_cache_path, exist_ok=True)
         self.popsize, self.maxiter = popsize, maxiter
         self.matching, self.keep_original = matching, keep_original
         self.num_conformers = num_conformers
@@ -102,11 +104,19 @@ class LazyPDBBindSet(Dataset):
         return self.get_by_name(name)
 
     def get_by_name(self, name):
+        if os.path.exists(os.path.join(self.full_cache_path, name + '.tombstone')):
+            return None
+        if os.path.exists(os.path.join(self.full_cache_path, name + '.pkl')):
+            with open(os.path.join(self.full_cache_path, name + '.pkl'), 'rb') as cache_file:
+                return pickle.load(cache_file)
+
         if not name or name not in self.complex_lm_embeddings:
             return None
-        lm_embedding_chains = self.complex_lm_embeddings[name]
+
+        lm_embedding_chains = list(map(lambda x: torch.load(x)['representations'][33], self.complex_lm_embeddings[name]))
         complex_graph, lig = self.get_complex(name, lm_embedding_chains)
         if not complex_graph or (self.require_ligand and not lig):
+            Path(os.path.join(self.full_cache_path, name + '.tombstone')).touch()
             return None
 
         if self.require_ligand:
@@ -118,6 +128,8 @@ class LazyPDBBindSet(Dataset):
             if hasattr(complex_graph['receptor'], a):
                 delattr(complex_graph['receptor'], a)
 
+        with open(os.path.join(self.full_cache_path, name + '.pkl'), 'wb') as cache_file:
+            pickle.dump(complex_graph, cache_file)
         return complex_graph
 
     def preprocessing(self):
@@ -127,6 +139,7 @@ class LazyPDBBindSet(Dataset):
                     parsed_row = row.split('\t')
                     self.ligand_smiles[(parsed_row[0].upper(), parsed_row[1].upper())] = parsed_row[2].strip()
 
+        print(self.split_path)
         self.complex_names_all = read_strings_from_txt(self.split_path)
         if self.slurm_array_task_count:
             slurm_task_size = int(math.ceil(len(self.complex_names_all) / self.slurm_array_task_count))
@@ -136,18 +149,20 @@ class LazyPDBBindSet(Dataset):
             print('Processing complexes ' + str(start_idx) + ' through ' + str(end_idx))
         else:
             if self.limit_complexes is not None and self.limit_complexes != 0:
-                self.complex_names_all = complex_names_all[:self.limit_complexes]
+                self.complex_names_all = self.complex_names_all[:self.limit_complexes]
         # generate embeddings for all of the complexes up front
         # load only the embeddings specific to the test set
         if self.esm_embeddings_path is not None:
-            id_to_embeddings = torch.load(self.esm_embeddings_path)
             chain_embeddings_dictlist = defaultdict(list)
             chain_indices_dictlist = defaultdict(list)
-            for key, embedding in id_to_embeddings.items():
-                key_name = key.split('_chain_')[0]
-                if key_name in self.complex_names_all:
-                    chain_embeddings_dictlist[key_name].append(embedding)
-                    chain_indices_dictlist[key_name].append(int(key.split('_chain_')[1]))
+            for embedding in glob.glob(os.path.join(self.esm_embeddings_path, '*_chain_*.pt')):
+                parsed_embedding = embedding.split('/')[-1].split('.')[0].split('_chain_')
+                key_name = parsed_embedding[0]
+                if key_name not in self.complex_names_all:
+                    continue
+                chain_idx = parsed_embedding[1]
+                chain_embeddings_dictlist[key_name].append(embedding)
+                chain_indices_dictlist[key_name].append(int(chain_idx))
             self.lm_embeddings_chains_all = []
             for name in self.complex_names_all:
                 complex_chains_embeddings = chain_embeddings_dictlist[name]
@@ -169,9 +184,12 @@ class LazyPDBBindSet(Dataset):
         try:
             parsed_name = name.split('_')
             pdb = parsed_name[0]
-            lig_name = parsed_name[2]
+            if len(parsed_name) >= 3:
+                lig_name = parsed_name[2]
+            else:
+                lig_name = None
             orig_lig_pos = None
-            if self.ligand_smiles and (pdb.upper(), lig_name.upper()) in self.ligand_smiles:
+            if lig_name and self.ligand_smiles and (pdb.upper(), lig_name.upper()) in self.ligand_smiles:
                 lig_smiles = self.ligand_smiles[(pdb.upper(), lig_name.upper())]
                 lig = Chem.MolFromSmiles(lig_smiles)
                 generate_conformer(lig)

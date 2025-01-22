@@ -24,8 +24,9 @@ from rdkit import RDLogger
 from torch_geometric.loader import DataLoader as GeometricDataLoader
 from rdkit.Chem import RemoveAllHs
 
+from utils.download import download_and_extract
 from datasets.lazy_pdbbind import LazyPDBBindSet
-from datasets.loader import CombineLazyPDBBind
+from datasets.loader import CombineLazyPDBBindSet
 from torch.utils.data import DataLoader
 from utils.diffusion_utils import t_to_sigma as t_to_sigma_compl, get_t_schedule
 from utils.sampling import randomize_position, sampling
@@ -37,6 +38,9 @@ RDLogger.DisableLog('rdApp.*')
 import yaml
 import pickle
 
+REPOSITORY_URL = os.environ.get("REPOSITORY_URL", "https://github.com/gcorso/DiffDock")
+REMOTE_URLS = [f"{REPOSITORY_URL}/releases/latest/download/diffdock_models.zip",
+               f"{REPOSITORY_URL}/releases/download/v1.1/diffdock_models.zip"]
 
 def get_dataset(args, model_args, confidence=False):
     dataset = LazyPDBBindSet(transform=None, root=args.data_dir, limit_complexes=args.limit_complexes, dataset=args.dataset,
@@ -70,7 +74,7 @@ if __name__ == '__main__':
     cache_name = datetime.now().strftime('date%d-%m_time%H-%M-%S.%f')
     parser = ArgumentParser()
     parser.add_argument('--config', type=FileType(mode='r'), default=None)
-    parser.add_argument('--model_dir', type=str, default='workdir/test_score', help='Path to folder with trained score model and hyperparameters')
+    parser.add_argument('--model_dir', type=str, default='workdir/v1.1/test_score', help='Path to folder with trained score model and hyperparameters')
     parser.add_argument('--ckpt', type=str, default='best_ema_inference_epoch_model.pt', help='Checkpoint to use inside the folder')
     parser.add_argument('--confidence_model_dir', type=str, default=None, help='Path to folder with trained confidence model and hyperparameters')
     parser.add_argument('--confidence_ckpt', type=str, default='best_model_epoch75.pt', help='Checkpoint to use inside the folder')
@@ -175,6 +179,29 @@ if __name__ == '__main__':
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
         torch.set_num_threads(threads)
+
+    # Download models if they don't exist locally
+    if not os.path.exists(args.model_dir):
+        print(f"Models not found. Downloading")
+        remote_urls = REMOTE_URLS
+        downloaded_successfully = False
+        for remote_url in remote_urls:
+            try:
+                print(f"Attempting download from {remote_url}")
+                files_downloaded = download_and_extract(remote_url, os.path.dirname(args.model_dir))
+                if not files_downloaded:
+                    print(f"Download from {remote_url} failed.")
+                    continue
+                print(f"Downloaded and extracted {len(files_downloaded)} files from {remote_url}")
+                downloaded_successfully = True
+                # Once we have downloaded the models, we can break the loop
+                break
+            except Exception as e:
+                print(traceback.format_exc(), flush = True)
+                pass
+
+        if not downloaded_successfully:
+            raise Exception(f"Models not found locally and failed to download them from {remote_urls}")
 
     if args.out_dir is None: args.out_dir = f'inference_out_dir_not_specified/{args.run_name}'
     os.makedirs(args.out_dir, exist_ok=True)
@@ -331,7 +358,7 @@ if __name__ == '__main__':
     failures = 0
     skipped = 0
 
-    combined_datasets = CombineLazyPDBBind(test_dataset, confidence_test_dataset)
+    combined_datasets = CombineLazyPDBBindSet(test_dataset, confidence_test_dataset)
     loader = DataLoader(combined_datasets, batch_size=1, num_workers=1, collate_fn=lambda batch: [x for x in batch if x is not None])
 
     for batch in loader:

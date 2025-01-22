@@ -333,7 +333,15 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
             unpooled_metrics=True, intervals=10)
     for data in tqdm(loader, total=len(loader)):
         try:
-            data = data.to(device)
+            if isinstance(data, list):
+                ## is data is passed in as list -> then the model is a DataParallel model
+                if device.type == 'cuda' and len(data) == 1 or device.type == 'cpu' and data.num_graphs == 1:
+                    print("Skipping batch of size 1 since otherwise batchnorm would not work.")
+                    continue
+                data = [d.to(device) for d in data] if device.type == 'cuda' else data
+            else:
+                ## else it is a regular model/DistributedDataParallel model
+                data = data.to(device)
             with torch.no_grad():
                 tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
             loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, apply_mean=False, device=device)

@@ -24,7 +24,7 @@ from utils.utils import save_yaml_file, get_optimizer_and_scheduler, get_model, 
 
 def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, val_dataset2):
 
-    if args.DDP or args.no_parallel:
+    if False: #args.DDP or args.no_parallel:
         loss_fn = partial(loss_function_ddp, tr_weight=args.tr_weight, rot_weight=args.rot_weight,
                     tor_weight=args.tor_weight, no_torsion=args.no_torsion, backbone_weight=args.backbone_loss_weight,
                     sidechain_weight=args.sidechain_loss_weight)
@@ -128,12 +128,12 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
 
         if args.inference_secondary_metric is not None and args.inference_secondary_metric in logs.keys() and \
                 (args.inference_earlystop_goal == 'min' and logs[args.inference_secondary_metric] <= best_val_secondary_value or
-                 args.inference_earlystop_goal == 'max' and logs[args.inference_secondary_metric] >= best_val_secondary_value):
+                 args.inference_earlystop_goal == 'max' and logs[args.inference_secondary_metric] >= best_val_secondary_value) and (not args.DDP or args.rank == 0):
             best_val_secondary_value = logs[args.inference_secondary_metric]
             if epoch > freeze_params:
                 torch.save(ema_state_dict, os.path.join(run_dir, 'best_ema_secondary_epoch_model.pt'))
 
-        if val_losses['loss'] <= best_val_loss:
+        if val_losses['loss'] <= best_val_loss and (not args.DDP or args.rank == 0):
             best_val_loss = val_losses['loss']
             best_epoch = epoch
             torch.save(state_dict, os.path.join(run_dir, 'best_model.pt'))
@@ -152,12 +152,13 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
             else:
                 scheduler.step(val_losses['loss'])
 
-        torch.save({
-            'epoch': epoch,
-            'model': state_dict,
-            'optimizer': optimizer.state_dict(),
-            'ema_weights': ema_weights.state_dict(),
-        }, os.path.join(run_dir, 'last_model.pt'))
+        if not args.DDP or args.rank == 0:
+            torch.save({
+                'epoch': epoch,
+                'model': state_dict,
+                'optimizer': optimizer.state_dict(),
+                'ema_weights': ema_weights.state_dict(),
+            }, os.path.join(run_dir, 'last_model.pt'))
 
     print("Best Validation Loss {} on Epoch {}".format(best_val_loss, best_epoch))
     print("Best inference metric {} on Epoch {}".format(best_val_inference_value, best_val_inference_epoch))
@@ -227,7 +228,7 @@ def main_function():
 
     # construct loader
     t_to_sigma = partial(t_to_sigma_compl, args=args)
-    train_loader, val_loader, val_dataset2 = construct_loader(args, t_to_sigma)
+    train_loader, val_loader, val_dataset2 = construct_loader(args, t_to_sigma, device)
     
     model = get_model(args, device, t_to_sigma=t_to_sigma, no_parallel=args.no_parallel)
     optimizer, scheduler = get_optimizer_and_scheduler(args, model, scheduler_mode=args.inference_earlystop_goal if args.val_inference_freq is not None else 'min')
@@ -260,11 +261,13 @@ def main_function():
     if args.wandb:
         wandb.log({'numel': numel})
 
-    # record parameters
     run_dir = os.path.join(args.log_dir, args.run_name)
-    yaml_file_name = os.path.join(run_dir, 'model_parameters.yml')
-    save_yaml_file(yaml_file_name, args.__dict__)
     args.device = device
+
+    # record parameters
+    if not args.DDP or rank == 0:
+        yaml_file_name = os.path.join(run_dir, 'model_parameters.yml')
+        save_yaml_file(yaml_file_name, args.__dict__) 
 
     train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, val_dataset2)
 
