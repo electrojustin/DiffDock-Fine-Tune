@@ -1,7 +1,7 @@
 #!/bin/bash
 
-#SBATCH --cpus-per-task 3
-#SBATCH --time=4:00:00
+#SBATCH --cpus-per-task 48
+#SBATCH --time=10:00:00
 #SBATCH --mail-type=BEGIN,END
 #SBATCH --mail-user=jeg10045@nyu.edu
 #SBATCH --mem=60G

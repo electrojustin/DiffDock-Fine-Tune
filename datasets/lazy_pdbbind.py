@@ -4,6 +4,7 @@ import glob
 import math
 import os
 import pickle
+import mmap
 from collections import defaultdict
 from multiprocessing import Pool
 from pathlib import Path
@@ -67,34 +68,30 @@ class LazyPDBBindSet(Dataset):
         self.dataset = dataset
         assert knn_only_graph or (not all_atoms)
         self.all_atoms = all_atoms
-        if matching or protein_path_list is not None and ligand_descriptions is not None:
-            cache_path += '_torsion'
-        if all_atoms:
-            cache_path += '_allatoms'
-        self.full_cache_path = os.path.join(cache_path, f'{dataset}3_limit{self.limit_complexes}'
-                                                        # f'_INDEX{os.path.splitext(os.path.basename(self.split_path))[0]}' # temp change
-                                                        f'_INDEXall_241120'
-                                                        f'_maxLigSize{self.max_lig_size}_H{int(not self.remove_hs)}'
-                                                        f'_recRad{self.receptor_radius}_recMax{self.c_alpha_max_neighbors}'
-                                                        f'_chainCutoff{self.chain_cutoff if self.chain_cutoff is None else int(self.chain_cutoff)}'
-                                            + (''if not all_atoms else f'_atomRad{atom_radius}_atomMax{atom_max_neighbors}')
-                                            + (''if not matching or num_conformers == 1 else f'_confs{num_conformers}')
-                                            + ('' if self.esm_embeddings_path is None else f'_esmEmbeddings')
-                                            + '_full'
-                                            + ('' if not keep_local_structures else f'_keptLocalStruct')
-                                            + ('' if protein_path_list is None or ligand_descriptions is None else str(binascii.crc32(''.join(ligand_descriptions + protein_path_list).encode())))
-                                            + ('' if protein_file == "protein_processed" else '_' + protein_file)
-                                            + ('' if not self.fixed_knn_radius_graph else (f'_fixedKNN' if not self.knn_only_graph else '_fixedKNNonly'))
-                                            + ('' if not self.include_miscellaneous_atoms else '_miscAtoms')
-                                            + ('' if self.use_old_wrong_embedding_order else '_chainOrd')
-                                            + ('' if self.matching_tries == 1 else f'_tries{matching_tries}'))
-        os.makedirs(self.full_cache_path, exist_ok=True)
+        self.cache_idx = None
+        self.cache = None
+        self.cache_file = None
+        os.makedirs(cache_path, exist_ok=True)
+        cache_idx_path = os.path.join(cache_path, 'index.pkl')
+        cache_path = os.path.join(cache_path, 'cache.dat')
+        if os.path.exists(cache_idx_path) and os.path.exists(cache_path):
+            print('Cache exists!')
+            with open(cache_idx_path, 'rb') as cache_idx_file:
+                self.cache_idx = pickle.load(cache_idx_file)
+            self.cache_file = open(cache_path, 'rb')
+            self.cache = mmap.mmap(self.cache_file.fileno(), 0, flags=mmap.MAP_SHARED, prot=mmap.PROT_READ)
         self.popsize, self.maxiter = popsize, maxiter
         self.matching, self.keep_original = matching, keep_original
         self.num_conformers = num_conformers
 
         self.atom_radius, self.atom_max_neighbors = atom_radius, atom_max_neighbors
         self.preprocessing()
+
+    def __del__(self):
+        if self.cache:
+            self.cache.close()
+        if self.cache_file:
+            self.cache_file.close()
 
     def len(self):
         return len(self.complex_names_all)
@@ -104,11 +101,19 @@ class LazyPDBBindSet(Dataset):
         return self.get_by_name(name)
 
     def get_by_name(self, name):
-        if os.path.exists(os.path.join(self.full_cache_path, name + '.tombstone')):
-            return None
-        if os.path.exists(os.path.join(self.full_cache_path, name + '.pkl')):
-            with open(os.path.join(self.full_cache_path, name + '.pkl'), 'rb') as cache_file:
-                return pickle.load(cache_file)
+        if self.cache and self.cache_idx:
+            if name in self.cache_idx:
+                offset = self.cache_idx[name][0]
+                size = self.cache_idx[name][1]
+                if size == 0:
+                    # Length of 0 indicates failed preprocessing
+                    return None
+                else:
+                    self.cache.seek(offset, 0)
+                    serialized_hetgraph = self.cache.read(size)
+                    return pickle.loads(serialized_hetgraph)
+            else:
+                return None
 
         if not name or name not in self.complex_lm_embeddings:
             return None
@@ -128,8 +133,6 @@ class LazyPDBBindSet(Dataset):
             if hasattr(complex_graph['receptor'], a):
                 delattr(complex_graph['receptor'], a)
 
-        with open(os.path.join(self.full_cache_path, name + '.pkl'), 'wb') as cache_file:
-            pickle.dump(complex_graph, cache_file)
         return complex_graph
 
     def preprocessing(self):
