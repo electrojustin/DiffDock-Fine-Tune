@@ -5,6 +5,7 @@ from datasets.dataloader import DataLoader, DataListLoader
 from datasets.moad import MOAD
 from datasets.pdb import PDBSidechain
 from datasets.pdbbind import NoiseTransform, PDBBind
+from datasets.pdbbind_rdkit_10 import PDBBind_rdkit_10
 from utils.utils import read_strings_from_txt
 
 
@@ -27,7 +28,7 @@ class CombineDatasets(Dataset):
         self.dataset1.add_complexes(new_complex_list)
 
 
-def construct_loader(args, t_to_sigma, device):
+def construct_loader(args, t_to_sigma):
     val_dataset2 = None
     transform = NoiseTransform(t_to_sigma=t_to_sigma, no_torsion=args.no_torsion,
                                all_atom=args.all_atoms, alpha=args.sampling_alpha, beta=args.sampling_beta,
@@ -115,9 +116,16 @@ def construct_loader(args, t_to_sigma, device):
                                unroll_clusters=args.unroll_clusters, root=args.moad_dir,
                                esm_embeddings_path=args.moad_esm_embeddings_path, require_ligand=True, **common_args)
 
-        loader_class = DataListLoader if torch.cuda.is_available() else DataLoader
+        loader_class = DataListLoader if torch.cuda.is_available() and not (args.no_parallel or args.DDP) else DataLoader
 
-    train_loader = loader_class(dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
-    val_loader = loader_class(dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=False, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
+    if args.DDP:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=args.world_size, rank=args.rank)
+        valid_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, num_replicas=args.world_size, rank=args.rank)
+
+    train_loader = loader_class(dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, 
+                                shuffle=False if args.DDP else True, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, 
+                                sampler=train_sampler if args.DDP else None )
+    val_loader = loader_class(dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, 
+                              shuffle=False, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, 
+                              sampler=valid_sampler if args.DDP else None )
     return train_loader, val_loader, val_dataset2
-
