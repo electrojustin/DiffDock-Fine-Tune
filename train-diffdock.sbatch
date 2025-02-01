@@ -2,7 +2,7 @@
 
 #SBATCH --tasks 4
 #SBATCH --cpus-per-task 2
-#SBATCH --time=48:00:00
+#SBATCH --time=100:00:00
 #SBATCH --mail-type=BEGIN,END
 #SBATCH --mail-user=jeg10045@nyu.edu
 #SBATCH --mem=240G

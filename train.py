@@ -3,10 +3,13 @@ import math
 import os
 import shutil
 from functools import partial
-
+import cProfile
+import time
 import wandb
 import torch
 import torch.distributed as dist
+import pstats
+import io
 from socket import gethostname
 torch.multiprocessing.set_sharing_strategy('file_system')
 
@@ -24,7 +27,7 @@ from utils.utils import save_yaml_file, get_optimizer_and_scheduler, get_model, 
 
 def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, val_dataset2):
 
-    if False: #args.DDP or args.no_parallel:
+    if args.DDP or args.no_parallel:
         loss_fn = partial(loss_function_ddp, tr_weight=args.tr_weight, rot_weight=args.rot_weight,
                     tor_weight=args.tor_weight, no_torsion=args.no_torsion, backbone_weight=args.backbone_loss_weight,
                     sidechain_weight=args.sidechain_loss_weight)
@@ -269,7 +272,18 @@ def main_function():
         yaml_file_name = os.path.join(run_dir, 'model_parameters.yml')
         save_yaml_file(yaml_file_name, args.__dict__) 
 
-    train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, val_dataset2)
+    if args.cpu_profile:
+        profiler = cProfile.Profile(time.process_time)
+        profiler.enable()
+        train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, val_dataset2)
+        profiler.disable()
+        profiler.print_stats(sort='tottime')
+        #s = io.StringIO()
+        #stats = pstats.Stats(profiler, stream=s)
+        #stats.sort_stats('tottime')
+        #stats.print_stats()
+    else:
+        train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, val_dataset2)
 
     if args.DDP:
         dist.destroy_process_group()

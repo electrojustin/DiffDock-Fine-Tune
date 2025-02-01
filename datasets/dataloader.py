@@ -15,6 +15,8 @@ class Collater:
 
     def __call__(self, batch):
         batch = [x for x in batch if x is not None]
+        if not batch:
+            return []
         elem = batch[0]
         if isinstance(elem, BaseData):
             return Batch.from_data_list(batch, self.follow_batch,

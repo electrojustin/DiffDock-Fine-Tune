@@ -37,6 +37,7 @@ class LazyPDBBindSet(Dataset):
                  smile_file=None,
                  slurm_array_idx=None,
                  slurm_array_task_count=None,
+                 max_receptor_size=None,
                  knn_only_graph=False, matching_tries=1, dataset='AlloSet'):
 
         super(LazyPDBBindSet, self).__init__(root, transform)
@@ -62,12 +63,20 @@ class LazyPDBBindSet(Dataset):
         self.keep_local_structures = keep_local_structures
         self.protein_file = protein_file
         self.fixed_knn_radius_graph = True
+        self.max_receptor_size = max_receptor_size
         self.knn_only_graph = knn_only_graph
         self.matching_tries = matching_tries
         self.ligand_file = ligand_file
         self.dataset = dataset
         assert knn_only_graph or (not all_atoms)
         self.all_atoms = all_atoms
+        self.popsize, self.maxiter = popsize, maxiter
+        self.matching, self.keep_original = matching, keep_original
+        self.num_conformers = num_conformers
+
+        self.atom_radius, self.atom_max_neighbors = atom_radius, atom_max_neighbors
+        self.preprocessing()
+
         self.cache_idx = None
         self.cache = None
         self.cache_file = None
@@ -79,13 +88,8 @@ class LazyPDBBindSet(Dataset):
             with open(cache_idx_path, 'rb') as cache_idx_file:
                 self.cache_idx = pickle.load(cache_idx_file)
             self.cache_file = open(cache_path, 'rb')
-            self.cache = mmap.mmap(self.cache_file.fileno(), 0, flags=mmap.MAP_SHARED, prot=mmap.PROT_READ)
-        self.popsize, self.maxiter = popsize, maxiter
-        self.matching, self.keep_original = matching, keep_original
-        self.num_conformers = num_conformers
-
-        self.atom_radius, self.atom_max_neighbors = atom_radius, atom_max_neighbors
-        self.preprocessing()
+            self.cache = mmap.mmap(self.cache_file.fileno(), 0, flags=mmap.MAP_PRIVATE, prot=mmap.PROT_READ)
+            self.complex_names_all = [x for x in self.complex_names_all if x in self.cache_idx]
 
     def __del__(self):
         if self.cache:
@@ -121,7 +125,6 @@ class LazyPDBBindSet(Dataset):
         lm_embedding_chains = list(map(lambda x: torch.load(x)['representations'][33], self.complex_lm_embeddings[name]))
         complex_graph, lig = self.get_complex(name, lm_embedding_chains)
         if not complex_graph or (self.require_ligand and not lig):
-            Path(os.path.join(self.full_cache_path, name + '.tombstone')).touch()
             return None
 
         if self.require_ligand:
@@ -245,6 +248,9 @@ class LazyPDBBindSet(Dataset):
             traceback.print_exc()
             return None, None
 
+        if self.max_receptor_size is not None and complex_graph['receptor'].pos.shape[0] > self.max_receptor_size:
+            print('Skipping {name} because receptor was too large (' + str(complex_graph['receptor'].pos.shape[0]) + ' residues)')
+            return None, None
         protein_center = torch.mean(complex_graph['receptor'].pos, dim=0, keepdim=True)
         complex_graph['receptor'].pos -= protein_center
         if self.all_atoms:

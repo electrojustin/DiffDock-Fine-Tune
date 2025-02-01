@@ -4,6 +4,7 @@ from rdkit.Chem import RemoveAllHs
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 import torch
+import traceback
 
 from confidence.dataset import ListDataset
 from utils import so3, torus
@@ -268,7 +269,13 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
     meter = AverageMeter(['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
                           'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'])
 
-    for data in tqdm(loader, total=len(loader)):
+    #for data in tqdm(loader, total=len(loader)):
+    for data_idx, data in enumerate(loader):
+        had_error = False
+        print('Train idx ' + str(data_idx) + ', receptor size ' + str(data['receptor'].pos.shape[0]) + ' residues', flush=True)
+        if not data:
+            print('Idx ' + str(data_idx) + ' failed preprocess', flush=True)
+            continue
         if isinstance(data, list):
             ## is data is passed in as list -> then the model is a DataParallel model
             if device.type == 'cuda' and len(data) == 1 or device.type == 'cpu' and data.num_graphs == 1:
@@ -283,39 +290,48 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
         try:
             tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
             loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, device=device)
-            if loss_tuple is None:
-                print("None loss tuple, skipping")
-                continue
             loss = loss_tuple[0]
 
             if torch.any(torch.isnan(loss)):
-                names = data.name if device.type == 'cpu' else [d.name for d in data]
-                print("Nan loss, skipping batch with complexes", names)
-                continue
+                names = [d.name for d in data] if isinstance(data, list) else data.name
+                print("Nan loss, skipping batch with complexes " + str(names) + ' (idx ' + str(data_idx) + ')', flush=True)
+                loss = loss.zero_()
+                had_error = True
+                #continue
+
             loss.backward()
-            optimizer.step()
-            if ema_weights is not None: ema_weights.update(model.parameters())
-            meter.add([loss.cpu().detach(), *loss_tuple[1:]])
             
         except RuntimeError as e:
             if 'out of memory' in str(e):
-                print('| WARNING: ran out of memory, skipping batch')
+                print('| WARNING: ran out of memory, skipping batch ' + str(data_idx), flush=True)
+
                 for p in model.parameters():
                     if p.grad is not None:
                         del p.grad  # free some memory
                 torch.cuda.empty_cache()
-                continue
+                had_error = True
             elif 'Input mismatch' in str(e):
-                print('| WARNING: weird torch_cluster error, skipping batch')
+                print('| WARNING: weird torch_cluster error, skipping batch ' + str(data_idx), flush=True)
                 for p in model.parameters():
                     if p.grad is not None:
                         del p.grad  # free some memory
                 torch.cuda.empty_cache()
-                continue
+                had_error = True
             else:
                 #raise e
-                print(e)
-                continue
+                print(e, flush=True)
+                print(traceback.format_exc(), flush=True)
+                for p in model.parameters():
+                    if p.grad is not None:
+                        del p.grad  # free some memory
+                torch.cuda.empty_cache()
+                had_error = True
+        if had_error:
+            optimizer.zero_grad()
+        optimizer.step()
+        if ema_weights is not None: ema_weights.update(model.parameters())
+        if not had_error:
+            meter.add([loss.cpu().detach(), *loss_tuple[1:]])
             
     return meter.summary()
 
@@ -331,7 +347,11 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
             ['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
              'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'],
             unpooled_metrics=True, intervals=10)
-    for data in tqdm(loader, total=len(loader)):
+    for data_idx, data in enumerate(loader):
+        has_error = False
+        print('Test idx ' + str(data_idx), flush=True)
+        if not data:
+            continue
         try:
             if isinstance(data, list):
                 ## is data is passed in as list -> then the model is a DataParallel model
@@ -345,8 +365,11 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
             with torch.no_grad():
                 tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
             loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, apply_mean=False, device=device)
-            if loss_tuple is None: continue
-            meter.add([loss_tuple[0].cpu().detach(), *loss_tuple[1:]])
+            if loss_tuple is None or torch.any(torch.isnan(loss_tuple[0])):
+                has_error = True
+                print('Nan detected evaluating complexes ' + str(data.name) + ' (batch idx ' + str(data_idx) + ')')
+            else:
+                meter.add([loss_tuple[0].cpu().detach(), *loss_tuple[1:]])
 
             if test_sigma_intervals > 0:
                 complex_t_tr, complex_t_rot, complex_t_tor = [torch.cat([data[i].complex_t[noise_type] for i in range(len(data))]) for

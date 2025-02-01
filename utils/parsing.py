@@ -5,6 +5,7 @@ def parse_train_args():
 
     # General arguments
     parser = ArgumentParser()
+    parser.add_argument('--cpu_profile', action='store_true', default=False, help='Use a CPU profiler')
     parser.add_argument('--config', type=FileType(mode='r'), default=None)
     parser.add_argument('--log_dir', type=str, default='workdir/test_score', help='Folder in which to save model and logs')
     parser.add_argument('--restart_dir', type=str, help='Folder of previous training model from which to restart')
@@ -20,7 +21,7 @@ def parse_train_args():
     parser.add_argument('--split_val', type=str, default='data/splits/timesplit_no_lig_overlap_val', help='Path of file defining the split')
     parser.add_argument('--split_test', type=str, default='data/splits/timesplit_test', help='Path of file defining the split')
     parser.add_argument('--test_sigma_intervals', action='store_true', default=False, help='Whether to log loss per noise interval')
-    parser.add_argument('--val_inference_freq', type=int, default=5, help='Frequency of epochs for which to run expensive inference on val data')
+    parser.add_argument('--val_inference_freq', type=int, default=None, help='Frequency of epochs for which to run expensive inference on val data')
     parser.add_argument('--save_model_freq', type=int, default=None, help='')
     parser.add_argument('--inference_samples', type=int, default=5, help='')
     parser.add_argument('--train_inference_freq', type=int, default=None, help='Frequency of epochs for which to run expensive inference on train data')
@@ -80,7 +81,7 @@ def parse_train_args():
     parser.add_argument('--include_miscellaneous_atoms', action='store_true', default=False, help='include non amino acid atoms for the receptor')
     parser.add_argument('--train_multiplicity', type=int, default=1, help='')
     parser.add_argument('--val_multiplicity', type=int, default=1, help='')
-    parser.add_argument('--max_receptor_size', type=int, default=None, help='')
+    parser.add_argument('--max_receptor_size', type=int, default=500, help='')
     parser.add_argument('--remove_promiscuous_targets', type=int, default=None, help='')
     parser.add_argument('--min_ligand_size', type=int, default=2, help='')
     parser.add_argument('--unroll_clusters', action='store_true', default=False, help='')
