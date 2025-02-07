@@ -22,6 +22,7 @@ def parse_train_args():
     parser.add_argument('--split_test', type=str, default='data/splits/timesplit_test', help='Path of file defining the split')
     parser.add_argument('--test_sigma_intervals', action='store_true', default=False, help='Whether to log loss per noise interval')
     parser.add_argument('--val_inference_freq', type=int, default=None, help='Frequency of epochs for which to run expensive inference on val data')
+    parser.add_argument('--pdbbind_inference_freq', type=int, default=None, help='')
     parser.add_argument('--save_model_freq', type=int, default=None, help='')
     parser.add_argument('--inference_samples', type=int, default=5, help='')
     parser.add_argument('--train_inference_freq', type=int, default=None, help='Frequency of epochs for which to run expensive inference on train data')

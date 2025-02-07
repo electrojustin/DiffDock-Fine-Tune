@@ -406,16 +406,17 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
     return out
 
 
-def inference_epoch_fix(model, complex_graphs, device, t_to_sigma, args):
+def inference_epoch_fix(model, loader, device, t_to_sigma, args):
+    model.eval()
     t_schedule = get_t_schedule(sigma_schedule='expbeta', inference_steps=args.inference_steps,
                                 inf_sched_alpha=1, inf_sched_beta=1)
     tr_schedule, rot_schedule, tor_schedule = t_schedule, t_schedule, t_schedule
-
-    dataset = ListDataset(complex_graphs)
-    loader = DataLoader(dataset=dataset, batch_size=1, shuffle=False)
     rmsds, min_rmsds = [], []
 
-    for orig_complex_graph in tqdm(loader):
+    for idx, orig_complex_graph in enumerate(loader):
+        print('Inference idx ' + str(idx), flush=True)
+        if not orig_complex_graph:
+            continue
         data_list = [copy.deepcopy(orig_complex_graph) for _ in range(args.inference_samples)]
         randomize_position(data_list, args.no_torsion, False, args.tr_sigma_max)
 
@@ -435,6 +436,7 @@ def inference_epoch_fix(model, complex_graphs, device, t_to_sigma, args):
                     print('failed 5 times - skipping the complex')
                     break
                 print("Exception while running inference on complex:", e)
+                print(traceback.format_exc())
         if failed_convergence_counter > 5:
             rmsds.extend([100] * args.inference_samples)
             min_rmsds.append(100)

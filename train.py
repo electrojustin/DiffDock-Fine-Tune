@@ -1,5 +1,6 @@
 import copy
 import math
+import setproctitle
 import os
 import shutil
 from functools import partial
@@ -10,13 +11,15 @@ import torch
 import torch.distributed as dist
 import pstats
 import io
+from torch.utils.data.distributed import DistributedSampler
+from datasets.dataloader import DataLoader
+from datasets.lazy_pdbbind import LazyPDBBindSet
 from socket import gethostname
 torch.multiprocessing.set_sharing_strategy('file_system')
-
+from datasets.pdbbind import NoiseTransform
 import resource
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
 resource.setrlimit(resource.RLIMIT_NOFILE, (64000, rlimit[1]))
-
 import yaml
 from utils.diffusion_utils import t_to_sigma as t_to_sigma_compl, t_to_sigma_individual
 from datasets.loader import construct_loader
@@ -25,7 +28,7 @@ from utils.training import train_epoch, test_epoch, loss_function, loss_function
 from utils.utils import save_yaml_file, get_optimizer_and_scheduler, get_model, ExponentialMovingAverage
 
 
-def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, val_dataset2):
+def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, pdbbind_loader):
 
     if args.DDP or args.no_parallel:
         loss_fn = partial(loss_function_ddp, tr_weight=args.tr_weight, rot_weight=args.rot_weight,
@@ -87,26 +90,16 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
               .format(epoch, val_losses['loss'], val_losses['tr_loss'], val_losses['rot_loss'], val_losses['tor_loss'], val_losses['sidechain_loss']))
 
         if args.val_inference_freq != None and (epoch + 1) % args.val_inference_freq == 0:
-            inf_dataset = [val_loader.dataset.get(i) for i in range(min(args.num_inference_complexes, val_loader.dataset.__len__()))]
-            inf_metrics = inference_epoch_fix(model, inf_dataset, device, t_to_sigma, args)
+            inf_metrics = inference_epoch_fix(model, val_loader, args.device, t_to_sigma, args)
             print("Epoch {}: Val inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
                   .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
             logs.update({'valinf_' + k: v for k, v in inf_metrics.items()}, step=epoch + 1)
 
-        if args.double_val and args.val_inference_freq != None and (epoch + 1) % args.val_inference_freq == 0:
-            inf_dataset = [val_dataset2.get(i) for i in range(min(args.num_inference_complexes, val_dataset2.__len__()))]
-            inf_metrics2 = inference_epoch_fix(model, inf_dataset, device, t_to_sigma, args)
-            print("Epoch {}: Val inference on second validation rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
-                  .format(epoch, inf_metrics2['rmsds_lt2'], inf_metrics2['rmsds_lt5'], inf_metrics2['min_rmsds_lt2'], inf_metrics2['min_rmsds_lt5']))
-            logs.update({'valinf2_' + k: v for k, v in inf_metrics2.items()}, step=epoch + 1)
-            logs.update({'valinfcomb_' + k: (v + inf_metrics[k])/2 for k, v in inf_metrics2.items()}, step=epoch + 1)
-
-        if args.train_inference_freq != None and (epoch + 1) % args.train_inference_freq == 0:
-            inf_dataset = [train_loader.dataset.get(i) for i in range(min(min(args.num_inference_complexes, 300), train_loader.dataset.__len__()))]
-            inf_metrics = inference_epoch_fix(model, inf_dataset, device, t_to_sigma, args)
-            print("Epoch {}: Train inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
+        if args.pdbbind_inference_freq != None and (epoch + 1) % args.pdbbind_inference_freq == 0:
+            inf_metrics = inference_epoch_fix(model, pdbbind_loader, args.device, t_to_sigma, args)
+            print("Epoch {}: PDBBind inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
                   .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
-            logs.update({'traininf_' + k: v for k, v in inf_metrics.items()}, step=epoch + 1)
+            logs.update({'pdbbindinf_' + k: v for k, v in inf_metrics.items()}, step=epoch + 1)
 
         if epoch > freeze_params:
             if not args.use_ema: ema_weights.copy_to(model.parameters())
@@ -231,7 +224,24 @@ def main_function():
 
     # construct loader
     t_to_sigma = partial(t_to_sigma_compl, args=args)
-    train_loader, val_loader, val_dataset2 = construct_loader(args, t_to_sigma, device)
+    train_loader, val_loader, _ = construct_loader(args, t_to_sigma, device)
+
+    transform = NoiseTransform(t_to_sigma=t_to_sigma, no_torsion=args.no_torsion,
+                               all_atom=args.all_atoms, alpha=args.sampling_alpha, beta=args.sampling_beta,
+                               include_miscellaneous_atoms=False if not hasattr(args, 'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
+                               crop_beyond_cutoff=args.crop_beyond)
+    pdbbind_common_args = {'transform': transform, 'limit_complexes': args.limit_complexes,
+                       'chain_cutoff': args.chain_cutoff, 'receptor_radius': args.receptor_radius,
+                       'c_alpha_max_neighbors': args.c_alpha_max_neighbors,
+                       'remove_hs': args.remove_hs, 'max_lig_size': args.max_lig_size,
+                       'matching': not args.no_torsion, 'popsize': args.matching_popsize, 'maxiter': args.matching_maxiter,
+                       'num_workers': args.num_workers, 'all_atoms': args.all_atoms,
+                       'atom_radius': args.atom_radius, 'atom_max_neighbors': args.atom_max_neighbors,
+                       'knn_only_graph': False if not hasattr(args, 'not_knn_only_graph') else not args.not_knn_only_graph,
+                       'include_miscellaneous_atoms': False if not hasattr(args, 'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
+                       'matching_tries': args.matching_tries}
+    pdbbind_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', cache_path='data/pdbbind_test_cache', split_path='data/splits/timesplit_test', keep_original=True, esm_embeddings_path='data/esm_embedding_output', root='data/PDBBind_processed/', protein_file='protein', require_ligand=True, max_receptor_size=500, **pdbbind_common_args)
+    pdbbind_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=pdbbind_dataset, batch_size=1, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(pdbbind_dataset), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('pdb_dataloader_'+str(worker_id)))
     
     model = get_model(args, device, t_to_sigma=t_to_sigma, no_parallel=args.no_parallel)
     optimizer, scheduler = get_optimizer_and_scheduler(args, model, scheduler_mode=args.inference_earlystop_goal if args.val_inference_freq is not None else 'min')
@@ -275,7 +285,7 @@ def main_function():
     if args.cpu_profile:
         profiler = cProfile.Profile(time.process_time)
         profiler.enable()
-        train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, val_dataset2)
+        train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, pdbbind_loader)
         profiler.disable()
         profiler.print_stats(sort='tottime')
         #s = io.StringIO()
@@ -283,7 +293,7 @@ def main_function():
         #stats.sort_stats('tottime')
         #stats.print_stats()
     else:
-        train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, val_dataset2)
+        train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, pdbbind_loader)
 
     if args.DDP:
         dist.destroy_process_group()
