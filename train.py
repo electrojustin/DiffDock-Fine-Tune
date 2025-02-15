@@ -214,7 +214,7 @@ def main_function():
 
     if args.wandb:
         wandb_args = {
-            'entity':'eac709-nyu',
+            'entity':args.entity,
             'settings':wandb.Settings(start_method="fork"),
             'project':args.project,
             'name':args.run_name,

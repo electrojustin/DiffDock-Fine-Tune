@@ -31,8 +31,9 @@ def parse_train_args():
     parser.add_argument('--inference_earlystop_metric', type=str, default='valinf_min_rmsds_lt2', help='This is the metric that is addionally used when val_inference_freq is not None')
     parser.add_argument('--inference_secondary_metric', type=str, default=None, help='')
     parser.add_argument('--inference_earlystop_goal', type=str, default='max', help='Whether to maximize or minimize metric')
-    parser.add_argument('--wandb', action='store_true', default=False, help='')
+    parser.add_argument('--wandb', action='store_true', default=False, help='Flag for logging runs on wandb')
     parser.add_argument('--project', type=str, default='diffdock', help='')
+    parser.add_argument('--entity', type=str, default='eac709-nyu', help='wandb account')
     parser.add_argument('--run_name', type=str, default='', help='')
     parser.add_argument('--wandb_id', type=str, default='', help='wandb restart id')
     parser.add_argument('--cudnn_benchmark', action='store_true', default=False, help='CUDA optimization parameter for faster training')
@@ -41,6 +42,7 @@ def parse_train_args():
     parser.add_argument('--pin_memory', action='store_true', default=False, help='pin_memory arg of dataloader')
     parser.add_argument('--dataloader_drop_last', action='store_true', default=False, help='drop_last arg of dataloader')
     parser.add_argument('--double_val', action='store_true', default=False, help='')
+    parser.add_argument('--rerun_val', action='store_true', default=False, help='Rerun complexes from the training set as a validation set to debug')
     parser.add_argument('--combined_training', action='store_true', default=False, help='')
 
     # Training arguments
