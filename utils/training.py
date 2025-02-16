@@ -270,9 +270,11 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
                           'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'])
 
     #for data in tqdm(loader, total=len(loader)):
+    num_nan = 0
     for data_idx, data in enumerate(loader):
         had_error = False
-        print('Train idx ' + str(data_idx) + ', receptor size ' + str(data['receptor'].pos.shape[0]) + ' residues', flush=True)
+        if data_idx % 1000 == 0:
+            print('Train idx ' + str(data_idx) + ', receptor size ' + str(data['receptor'].pos.shape[0]) + ' residues', flush=True)
         if not data:
             print('Idx ' + str(data_idx) + ' failed preprocess', flush=True)
             continue
@@ -297,6 +299,7 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
                 print("Nan loss, skipping batch with complexes " + str(names) + ' (idx ' + str(data_idx) + ')', flush=True)
                 loss = loss.zero_()
                 had_error = True
+                num_nan += 1
                 #continue
 
             loss.backward()
@@ -332,24 +335,29 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
         if ema_weights is not None: ema_weights.update(model.parameters())
         if not had_error:
             meter.add([loss.cpu().detach(), *loss_tuple[1:]])
-            
-    return meter.summary()
+
+    out = meter.summary()
+    out["num_nan"] = num_nan
+    return out
 
 
 def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=False):
     model.eval()
     meter = AverageMeter(['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
-                          'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'],
+                          'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss',
+                          'num_nan'],
                          unpooled_metrics=True)
-
+    num_nan = 0
     if test_sigma_intervals:
         meter_all = AverageMeter(
             ['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
-             'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'],
+             'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss',
+             'num_nan'],
             unpooled_metrics=True, intervals=10)
     for data_idx, data in enumerate(loader):
         has_error = False
-        print('Test idx ' + str(data_idx), flush=True)
+        if data_idx % 100 == 0:
+            print('Test idx ' + str(data_idx) + ', receptor size ' + str(data['receptor'].pos.shape[0]) + ' residues', flush=True)
         if not data:
             continue
         try:
@@ -367,6 +375,8 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
             loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, apply_mean=False, device=device)
             if loss_tuple is None or torch.any(torch.isnan(loss_tuple[0])):
                 has_error = True
+                loss_tuple[0].zero_()
+                num_nan += 1
                 print('Nan detected evaluating complexes ' + str(data.name) + ' (batch idx ' + str(data_idx) + ')')
             else:
                 meter.add([loss_tuple[0].cpu().detach(), *loss_tuple[1:]])
@@ -379,8 +389,7 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
                 sigma_index_tor = torch.round(complex_t_tor.cpu() * (10 - 1)).long()
                 meter_all.add([loss_tuple[0].cpu().detach(), *loss_tuple[1:]],
                     [sigma_index_tr, sigma_index_tr, sigma_index_rot, sigma_index_tor, sigma_index_tr, sigma_index_tr,
-                     sigma_index_tr, sigma_index_rot, sigma_index_tor, sigma_index_tr, sigma_index_tr])
-
+                     sigma_index_tr, sigma_index_rot, sigma_index_tor, sigma_index_tr, sigma_index_tr])                    
         except RuntimeError as e:
             if 'out of memory' in str(e):
                 print('| WARNING: ran out of memory, skipping batch')
@@ -403,6 +412,7 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
 
     out = meter.summary()
     if test_sigma_intervals > 0: out.update(meter_all.summary())
+    out["num_nan"] = num_nan
     return out
 
 

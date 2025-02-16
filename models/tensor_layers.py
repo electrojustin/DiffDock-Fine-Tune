@@ -127,7 +127,7 @@ def tp_scatter_simple(tp, fc_layer, node_attr, edge_index, edge_attr, edge_sh,
     """
     Perform TensorProduct + scatter operation, aka graph convolution.
 
-    This function is only for edge_groups == 1. For multiple edge groups, and for larger graphs,
+    This function is only for out_irrepss == 1. For multiple edge groups, and for larger graphs,
     use tp_scatter_multigroup instead.
     """
 
@@ -196,7 +196,7 @@ def tp_scatter_multigroup(tp: o3.TensorProduct, fc_layer: Union[nn.Module, nn.Mo
     edge_weight_is_indexable = hasattr(edge_weight, '__getitem__')
 
     out_nodes = out_nodes or node_attr.shape[0]
-    total_output_dim = sum([x.dim for x in tp.irreps_out])
+    total_output_dim = sum([x.dim for x in tp.out_irreps])
     final_out = torch.zeros((out_nodes, total_output_dim), device=_device, dtype=_dtype)
     div_factors = torch.zeros(out_nodes, device=_device, dtype=_dtype)
 

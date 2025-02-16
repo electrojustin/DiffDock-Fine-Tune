@@ -107,11 +107,19 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
             ema_weights.restore(model.parameters())
 
         if args.wandb:
-            logs.update({'train_' + k: v for k, v in train_losses.items()})
-            logs.update({'val_' + k: v for k, v in val_losses.items()})
-            logs['current_lr'] = optimizer.param_groups[0]['lr']
-            wandb.log(logs, step=epoch + 1)
-
+            if args.DDP:
+                if args.local_rank==0:
+                    print("log wandb: rank 0")
+                    logs.update({'train_' + k: v for k, v in train_losses.items()})
+                    logs.update({'val_' + k: v for k, v in val_losses.items()})
+                    logs['current_lr'] = optimizer.param_groups[0]['lr']
+                    wandb.log(logs, step=epoch + 1)
+            else:
+                logs.update({'train_' + k: v for k, v in train_losses.items()})
+                logs.update({'val_' + k: v for k, v in val_losses.items()})
+                logs['current_lr'] = optimizer.param_groups[0]['lr']
+                wandb.log(logs, step=epoch + 1)
+                
         state_dict = model.module.state_dict() if device.type == 'cuda' and not (args.no_parallel or args.DDP) else model.state_dict()
         if args.inference_earlystop_metric in logs.keys() and \
                 (args.inference_earlystop_goal == 'min' and logs[args.inference_earlystop_metric] <= best_val_inference_value or
@@ -179,25 +187,6 @@ def main_function():
     if args.cudnn_benchmark:
         torch.backends.cudnn.benchmark = True
 
-    if args.wandb:
-        wandb_args = {
-            'entity':'eac709-nyu',
-            'settings':wandb.Settings(start_method="fork"),
-            'project':args.project,
-            'name':args.run_name,
-            'config':args,
-        }
-        if args.DDP:
-            print("DDP wandb group")
-            wandb_args.update({'group':"DDP"})
-        if args.restart_dir: 
-            print("resume wandb run")
-            wandb_args.update({
-                "id":args.wandb_id,
-                "resume":"must"
-            })
-        wandb.init(**wandb_args)
-
     local_rank=None
     if args.DDP:
         world_size    = int(os.environ["WORLD_SIZE"])
@@ -219,8 +208,35 @@ def main_function():
         device = torch.device(f'cuda:{local_rank}')
         args.world_size=world_size
         args.rank=rank
+        args.local_rank=local_rank
     else:
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+    if args.wandb:
+        wandb_args = {
+            'entity':args.entity,
+            'settings':wandb.Settings(start_method="fork"),
+            'project':args.project,
+            'name':args.run_name,
+            'config':args,
+        }
+        if args.restart_dir: 
+            print(f"resume wandb run: {args.wandb_id}")
+            wandb_args.update({
+                "id":args.wandb_id,
+                "resume":"must"
+            })
+        if args.DDP:
+            ## wandb has issues spawning multiple runs when doing DDP..resolve this by only tracking rank0
+            # wandb_args.update({
+            #     'group':"DDP",
+            #     'job_type':"worker"
+            # })
+            if args.local_rank==0:
+                print("Log DDP only from rank0")
+                wandb.init(**wandb_args)
+        else:
+            wandb.init(**wandb_args)
 
     # construct loader
     t_to_sigma = partial(t_to_sigma_compl, args=args)
@@ -252,7 +268,7 @@ def main_function():
             dict = torch.load(f'{args.restart_dir}/{args.restart_ckpt}.pt', map_location=torch.device('cpu'))
             if args.restart_lr is not None: dict['optimizer']['param_groups'][0]['lr'] = args.restart_lr
             optimizer.load_state_dict(dict['optimizer'])
-            model.module.load_state_dict(dict['model'], strict=True)
+            model.load_state_dict(dict['model'], strict=True)
             if hasattr(args, 'ema_rate'):
                 ema_weights.load_state_dict(dict['ema_weights'], device=device)
             print("Restarting from epoch", dict['epoch'])
@@ -261,7 +277,7 @@ def main_function():
         except Exception as e:
             print("Exception", e)
             dict = torch.load(f'{args.restart_dir}/best_model.pt', map_location=torch.device('cpu'))
-            model.module.load_state_dict(dict, strict=True)
+            model.load_state_dict(dict, strict=True)
             print("Due to exception had to take the best epoch and no optimiser")
     elif args.pretrain_dir:
         dict = torch.load(f'{args.pretrain_dir}/{args.pretrain_ckpt}.pt', map_location=torch.device('cpu'))
@@ -272,7 +288,11 @@ def main_function():
     print('Model with', numel, 'parameters')
 
     if args.wandb:
-        wandb.log({'numel': numel})
+        if args.DDP:
+            if args.local_rank==0:
+                wandb.log({'numel': numel})
+        else:
+            wandb.log({'numel': numel})
 
     run_dir = os.path.join(args.log_dir, args.run_name)
     args.device = device
@@ -297,7 +317,8 @@ def main_function():
 
     if args.DDP:
         dist.destroy_process_group()
-        wandb.finish()
+        if local_rank==0:
+            wandb.finish()
 
 def setup(rank, world_size):
     # initialize the process group
