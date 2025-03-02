@@ -1,12 +1,12 @@
 #!/bin/bash
 
-#SBATCH --tasks 2
-#SBATCH --cpus-per-task 2
+#SBATCH --tasks 4
+#SBATCH --cpus-per-task 4
 #SBATCH --time=08:00:00
 #SBATCH --mail-type=BEGIN,END
 #SBATCH --mail-user=jeg10045@nyu.edu
-#SBATCH --mem=120G
-#SBATCH --gres=gpu:2
+#SBATCH --mem=60G
+#SBATCH --gres=gpu:4
 #SBATCH --job-name=train-diffdock
 
 module purge

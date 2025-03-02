@@ -62,6 +62,7 @@ val_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset
 with open(cache_path, 'wb') as cache_file:
     print('Processing training data')
     for data in tqdm(train_loader, total=len(train_loader)):
+        print(data)
         data = data[0]
         if not data:
             continue

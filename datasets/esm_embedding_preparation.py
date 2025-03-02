@@ -53,11 +53,13 @@ if args.dataset == 'pdbbind':
     ids = []
 
     for name in tqdm(names):
-        if name == '.DS_Store': continue
+        if name == '.DS_Store' or '.txt' in name: continue
         if os.path.exists(os.path.join(data_dir, name, f'{name}_protein_processed.pdb')):
             rec_path = os.path.join(data_dir, name, f'{name}_protein_processed.pdb')
         else:
-            rec_path = os.path.join(data_dir, name, f'{name}_protein.pdb')
+            short_name = name.split('_')[0]
+            rec_path = os.path.join(data_dir, name, f'{short_name}_protein.pdb')
+            #rec_path = os.path.join(data_dir, name, f'{name}_protein.pdb')
         l = get_structure_from_file(rec_path)
         for i, seq in enumerate(l):
             sequences.append(seq)
