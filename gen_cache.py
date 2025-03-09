@@ -52,7 +52,7 @@ common_args = {'transform': None, 'limit_complexes': args.limit_complexes,
                'include_miscellaneous_atoms': False if not hasattr(args, 'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
                'matching_tries': args.matching_tries}
 
-train_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', cache_path=args.cache_path, split_path=args.split_train, keep_original=True, num_conformers=args.num_conformers, root=args.pdbbind_dir, esm_embeddings_path=args.pdbbind_esm_embeddings_path, protein_file=args.protein_file, max_receptor_size=args.max_receptor_size, **common_args)
+train_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', cache_path=args.cache_path, split_path=args.split_train, keep_original=True, num_conformers=args.num_conformers, root=args.pdbbind_dir, esm_embeddings_path=args.pdbbind_esm_embeddings_path, protein_file=args.protein_file, require_ligand=True, max_receptor_size=args.max_receptor_size, **common_args)
 val_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', cache_path=args.cache_path, split_path=args.split_val, keep_original=True, num_conformers=args.num_conformers, root=args.pdbbind_dir, esm_embeddings_path=args.pdbbind_esm_embeddings_path, protein_file=args.protein_file, require_ligand=True, max_receptor_size=args.max_receptor_size, **common_args)
 
 train_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=train_dataset, batch_size=1, num_workers=args.num_dataloader_workers, collate_fn=lambda x: x)
@@ -62,10 +62,10 @@ val_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset
 with open(cache_path, 'wb') as cache_file:
     print('Processing training data')
     for data in tqdm(train_loader, total=len(train_loader)):
-        print(data)
         data = data[0]
         if not data:
             continue
+        print(data)
         name = data.name
         offset = cache_file.tell()
         cache_file.write(pickle.dumps(data))

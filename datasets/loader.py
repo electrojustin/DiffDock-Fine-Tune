@@ -100,7 +100,7 @@ def construct_loader(args, t_to_sigma, device):
             train_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', cache_path=args.cache_path, split_path=args.split_train, keep_original=True,
                                     num_conformers=args.num_conformers, root=args.pdbbind_dir,
                                     esm_embeddings_path=args.pdbbind_esm_embeddings_path,
-                                    protein_file=args.protein_file, max_receptor_size=args.max_receptor_size, **common_args)
+                                    protein_file=args.protein_file, require_ligand=True, max_receptor_size=args.max_receptor_size, **common_args)
 
         if args.dataset == 'moad' or args.combined_training:
             train_dataset2 = MOAD(cache_path=args.cache_path, split='train', keep_original=True,

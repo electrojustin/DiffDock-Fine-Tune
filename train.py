@@ -75,7 +75,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                                                                optimizer=optimizer)
 
         logs = {}
-        train_losses = train_epoch(model, train_loader, optimizer, device, t_to_sigma, loss_fn, ema_weights if epoch > freeze_params else None)
+        train_losses = train_epoch(model, train_loader, optimizer, args.device, t_to_sigma, loss_fn, ema_weights if epoch > freeze_params else None)
         # number of tdqm batches = len(train_dataset) / (args.batch_size)
         
         print("Epoch {}: Training loss {:.4f}  tr {:.4f}   rot {:.4f}   tor {:.4f}   sc {:.4f}  lr {:.4f}"
@@ -88,6 +88,12 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
         val_losses = test_epoch(model, val_loader, args.device, t_to_sigma, loss_fn, args.test_sigma_intervals)
         print("Epoch {}: Validation loss {:.4f}  tr {:.4f}   rot {:.4f}   tor {:.4f}   sc {:.4f}"
               .format(epoch, val_losses['loss'], val_losses['tr_loss'], val_losses['rot_loss'], val_losses['tor_loss'], val_losses['sidechain_loss']))
+
+        if args.train_inference_freq != None and epoch % args.train_inference_freq == 0:
+            inf_metrics = inference_epoch_fix(model, train_loader, args.device, t_to_sigma, args)
+            print("Epoch {}: Train inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
+                  .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
+            logs.update({'traininf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
         if args.val_inference_freq != None and epoch % args.val_inference_freq == 0:
             inf_metrics = inference_epoch_fix(model, val_loader, args.device, t_to_sigma, args)

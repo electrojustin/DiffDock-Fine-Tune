@@ -432,6 +432,7 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
             continue
         data_list = [copy.deepcopy(orig_complex_graph) for _ in range(args.inference_samples)]
         randomize_position(data_list, args.no_torsion, False, args.tr_sigma_max)
+        data_list = [d.to(device) for d in data_list]
 
         predictions_list = None
         failed_convergence_counter = 0
