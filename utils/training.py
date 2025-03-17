@@ -273,11 +273,14 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
     num_nan = 0
     for data_idx, data in enumerate(loader):
         had_error = False
-        if data_idx % 1000 == 0:
-            print('Train idx ' + str(data_idx) + ', receptor size ' + str(data['receptor'].pos.shape[0]) + ' residues', flush=True)
         if not data:
             print('Idx ' + str(data_idx) + ' failed preprocess', flush=True)
             continue
+        if data['receptor'].pos.shape[0] == 0:
+            print(data['name'][0] + ' was cropped!', flush=True)
+            continue
+        if data_idx % 10 == 0:
+            print('Train idx ' + str(data_idx) + ', receptor size ' + str(data['receptor'].pos.shape[0]) + ' residues', flush=True)
         if isinstance(data, list):
             ## is data is passed in as list -> then the model is a DataParallel model
             if device.type == 'cuda' and len(data) == 1 or device.type == 'cpu' and data.num_graphs == 1:
@@ -356,9 +359,9 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
             unpooled_metrics=True, intervals=10)
     for data_idx, data in enumerate(loader):
         has_error = False
-        if data_idx % 100 == 0:
+        if data_idx % 10 == 0:
             print('Test idx ' + str(data_idx) + ', receptor size ' + str(data['receptor'].pos.shape[0]) + ' residues', flush=True)
-        if not data:
+        if not data or data['receptor'].pos.shape[0] == 0:
             continue
         try:
             if isinstance(data, list):
@@ -425,10 +428,11 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
 
     for idx, orig_complex_graph in enumerate(loader):
         print('Inference idx ' + str(idx), flush=True)
-        if not orig_complex_graph:
+        if not orig_complex_graph or orig_complex_graph['receptor'].pos.shape[0] == 0:
             continue
         data_list = [copy.deepcopy(orig_complex_graph) for _ in range(args.inference_samples)]
         randomize_position(data_list, args.no_torsion, False, args.tr_sigma_max)
+        data_list = [d.to(device) for d in data_list]
 
         predictions_list = None
         failed_convergence_counter = 0
