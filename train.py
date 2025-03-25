@@ -91,20 +91,20 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
 
         if args.train_inference_freq != None and epoch % args.train_inference_freq == 0:
             inf_metrics = inference_epoch_fix(model, train_loader, args.device, t_to_sigma, args)
-            print("Epoch {}: Train inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
-                  .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
+            print("Epoch {}: Train inference rmsd_median {:.3f} rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f} centroid_median {:.3f} centroid_lt2 {:.3f} centroid_lt5 {:.3f} min_centroid_lt2 {:.3f} min_centroid_lt5 {:.3f}"
+                  .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
             logs.update({'traininf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
         if args.val_inference_freq != None and epoch % args.val_inference_freq == 0:
             inf_metrics = inference_epoch_fix(model, val_loader, args.device, t_to_sigma, args)
-            print("Epoch {}: Val inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
-                  .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
+            print("Epoch {}: Val inference rmsd_median {:.3f} rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f} centroid_median {:.3f} centroid_lt2 {:.3f} centroid_lt5 {:.3f} min_centroid_lt2 {:.3f} min_centroid_lt5 {:.3f}"
+                  .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
             logs.update({'valinf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
         if args.pdbbind_inference_freq != None and epoch % args.pdbbind_inference_freq == 0:
             inf_metrics = inference_epoch_fix(model, pdbbind_loader, args.device, t_to_sigma, args)
-            print("Epoch {}: PDBBind inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
-                  .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
+            print("Epoch {}: PDBBind inference rmsd_median {:.3f} rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f} centroid_median {:.3f} centroid_lt2 {:.3f} centroid_lt5 {:.3f} min_centroid_lt2 {:.3f} min_centroid_lt5 {:.3f}"
+                  .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
             logs.update({'pdbbindinf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
         if epoch > freeze_params:

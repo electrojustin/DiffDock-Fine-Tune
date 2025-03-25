@@ -425,9 +425,12 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
                                 inf_sched_alpha=1, inf_sched_beta=1)
     tr_schedule, rot_schedule, tor_schedule = t_schedule, t_schedule, t_schedule
     rmsds, min_rmsds = [], []
+    centroids, min_centroids = [], []
 
     for idx, orig_complex_graph in enumerate(loader):
         print('Inference idx ' + str(idx), flush=True)
+        if idx >= args.num_inference_complexes:
+            break
         if not orig_complex_graph or orig_complex_graph['receptor'].pos.shape[0] == 0:
             continue
         data_list = [copy.deepcopy(orig_complex_graph) for _ in range(args.inference_samples)]
@@ -478,6 +481,7 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
             continue
         mol = RemoveAllHs(orig_complex_graph.mol[0])
         complex_rmsds = []
+        complex_centroids = []
         for i in range(len(orig_ligand_pos)):
             try:
                 rmsd = get_symmetry_rmsd(mol, orig_ligand_pos[i], [l for l in ligand_pos])
@@ -485,16 +489,30 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
                 print("Using non corrected RMSD because of the error:", e)
                 rmsd = np.sqrt(((ligand_pos - orig_ligand_pos[i]) ** 2).sum(axis=2).mean(axis=1))
             complex_rmsds.append(rmsd)
+            centroid = np.sqrt(((ligand_pos.mean(axis=1) - orig_ligand_pos[i].mean(axis=0)) ** 2).sum(axis=1))
+            complex_centroids.append(centroid)
         complex_rmsds = np.asarray(complex_rmsds)
         rmsd = np.min(complex_rmsds, axis=0)
-        
         rmsds.extend([r for r in rmsd])
         min_rmsds.append(rmsd.min(axis=0))
+        complex_centroids = np.asarray(complex_centroids)
+        centroid = np.min(complex_centroids, axis=0)
+        centroids.extend([c for c in centroid])
+        min_centroids.append(centroid.min(axis=0))
 
     rmsds = np.array(rmsds)
     min_rmsds = np.array(min_rmsds)
-    losses = {'rmsds_lt2': (100 * (rmsds < 2).sum() / len(rmsds)),
+    centroids = np.array(centroids)
+    min_centroids = np.array(min_centroids)
+    losses = {'rmsd_median': np.median(rmsds),
+              'centroid_median': np.median(centroids),
+              'rmsds_lt2': (100 * (rmsds < 2).sum() / len(rmsds)),
               'rmsds_lt5': (100 * (rmsds < 5).sum() / len(rmsds)),
+              'centroid_lt2': (100 * (centroids < 2).sum() / len(centroids)),
+              'centroid_lt5': (100 * (centroids < 5).sum() / len(centroids)),
               'min_rmsds_lt2': (100 * (min_rmsds < 2).sum() / len(min_rmsds)),
-              'min_rmsds_lt5': (100 * (min_rmsds < 5).sum() / len(min_rmsds)),}
+              'min_rmsds_lt5': (100 * (min_rmsds < 5).sum() / len(min_rmsds)),
+              'min_centroid_lt2': (100 * (min_centroids < 2).sum() / len(min_centroids)),
+              'min_centroid_lt5': (100 * (min_centroids < 5).sum() / len(min_centroids)),
+              }
     return losses

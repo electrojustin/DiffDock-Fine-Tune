@@ -9,6 +9,7 @@ from functools import partial
 import warnings
 from typing import Mapping, Optional
 from rdkit.Chem import MolFromSmiles
+from rdkit import Chem
 from datasets.process_mols import read_molecule
 
 import yaml
@@ -229,7 +230,7 @@ def main(args):
             try:
                 complex_graph_batch = complex_graph_batch.to(device)
                 set_time(complex_graph_batch, 0, 0, 0, 0, complex_graph_batch.num_graphs, confidence_args.all_atoms, device)
-                pose_mol = pose_mol_lookup[complex_graph_batch.name[0]]
+                pose_mol = Chem.RemoveHs(pose_mol_lookup[complex_graph_batch.name[0]])
                 complex_graph_batch.mol = pose_mol
                 complex_graph_batch['ligand'].pos = torch.from_numpy(pose_mol.GetConformer().GetPositions()).float().to(device) - complex_graph_batch.original_center
                 with torch.no_grad():

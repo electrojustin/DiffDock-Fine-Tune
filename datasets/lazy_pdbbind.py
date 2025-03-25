@@ -255,10 +255,10 @@ class LazyPDBBindSet(Dataset):
         protein_center = torch.mean(complex_graph['receptor'].pos, dim=0, keepdim=True)
         #lig_center = torch.mean(complex_graph['ligand'].pos, dim=0, keepdim=True)
         lig_center = torch.mean(torch.from_numpy(complex_graph['ligand'].orig_pos), dim=0, keepdim=True)
-        if torch.sum((protein_center - lig_center)**2) > 1000.0:
+        #if torch.sum((protein_center - lig_center)**2) > 1000.0:
             # This usually means our simulation dissociated
-            print('Skipping ' + complex_graph['name'] + ' due to dissociation', flush=True)
-            return None, None
+            #print('Skipping ' + complex_graph['name'] + ' due to dissociation', flush=True)
+            #return None, None
         complex_graph['receptor'].pos -= protein_center
         if self.all_atoms:
             complex_graph['atom'].pos -= protein_center
