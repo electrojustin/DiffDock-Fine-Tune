@@ -12,7 +12,7 @@ import torch.distributed as dist
 import pstats
 import io
 from torch.utils.data.distributed import DistributedSampler
-from datasets.dataloader import DataLoader
+from datasets.dataloader import DataLoader, DataListLoader
 from datasets.lazy_pdbbind import LazyPDBBindSet
 from socket import gethostname
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -226,9 +226,10 @@ def main_function():
             'settings':wandb.Settings(start_method="fork"),
             'project':args.project,
             'name':args.run_name,
+            'group':args.group,
             'config':args,
         }
-        if args.restart_dir: 
+        if args.restart_dir and args.wandb_id: 
             print(f"resume wandb run: {args.wandb_id}")
             wandb_args.update({
                 "id":args.wandb_id,
@@ -254,19 +255,30 @@ def main_function():
                                all_atom=args.all_atoms, alpha=args.sampling_alpha, beta=args.sampling_beta,
                                include_miscellaneous_atoms=False if not hasattr(args, 'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
                                crop_beyond_cutoff=args.crop_beyond)
-    pdbbind_common_args = {'transform': transform, 'limit_complexes': args.limit_complexes,
-                       'chain_cutoff': args.chain_cutoff, 'receptor_radius': args.receptor_radius,
-                       'c_alpha_max_neighbors': args.c_alpha_max_neighbors,
-                       'remove_hs': args.remove_hs, 'max_lig_size': args.max_lig_size,
-                       'matching': not args.no_torsion, 'popsize': args.matching_popsize, 'maxiter': args.matching_maxiter,
-                       'num_workers': args.num_workers, 'all_atoms': args.all_atoms,
-                       'atom_radius': args.atom_radius, 'atom_max_neighbors': args.atom_max_neighbors,
-                       'knn_only_graph': False if not hasattr(args, 'not_knn_only_graph') else not args.not_knn_only_graph,
-                       'include_miscellaneous_atoms': False if not hasattr(args, 'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
-                       'matching_tries': args.matching_tries}
-    pdbbind_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', cache_path='data/pdbbind_test_cache', split_path='data/splits/timesplit_test', keep_original=True, esm_embeddings_path='data/esm_embedding_output', root='data/PDBBind_processed/', protein_file='protein', require_ligand=True, max_receptor_size=500, **pdbbind_common_args)
-    pdbbind_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=pdbbind_dataset, batch_size=1, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(pdbbind_dataset), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('pdb_dataloader_'+str(worker_id)))
     
+    if args.pdbbind_inference_freq:
+        pdbbind_common_args = {'transform': transform, 'limit_complexes': args.limit_complexes,
+                        'chain_cutoff': args.chain_cutoff, 'receptor_radius': args.receptor_radius,
+                        'c_alpha_max_neighbors': args.c_alpha_max_neighbors,
+                        'remove_hs': args.remove_hs, 'max_lig_size': args.max_lig_size,
+                        'matching': not args.no_torsion, 'popsize': args.matching_popsize, 'maxiter': args.matching_maxiter,
+                        'num_workers': args.num_workers, 'all_atoms': args.all_atoms,
+                        'atom_radius': args.atom_radius, 'atom_max_neighbors': args.atom_max_neighbors,
+                        'knn_only_graph': False if not hasattr(args, 'not_knn_only_graph') else not args.not_knn_only_graph,
+                        'include_miscellaneous_atoms': False if not hasattr(args, 'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
+                        'matching_tries': args.matching_tries}
+        pdbbind_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', \
+            cache_path='/scratch/projects/yzlab/group/kinase_eric/kinase_location_classifier/jeg10045_kinase_scripts/diffdock/DiffDock/data/pdbbind_test_cache', \
+            split_path='/scratch/projects/yzlab/group/kinase_eric/kinase_location_classifier/jeg10045_kinase_scripts/diffdock/DiffDock/data/splits/timesplit_test', \
+            keep_original=True, \
+            esm_embeddings_path='/scratch/projects/yzlab/group/kinase_eric/kinase_location_classifier/jeg10045_kinase_scripts/diffdock/DiffDock/data/esm_embedding_output',\
+            root='/scratch/projects/yzlab/group/kinase_eric/kinase_location_classifier/jeg10045_kinase_scripts/diffdock/DiffDock/data/PDBBind_processed/', \
+            protein_file='protein', require_ligand=True, max_receptor_size=500, **pdbbind_common_args)
+        if args.DDP:
+            pdbbind_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=pdbbind_dataset, batch_size=1, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(pdbbind_dataset), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('pdb_dataloader_'+str(worker_id)))
+        else:
+            pdbbind_loader = DataListLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=pdbbind_dataset, batch_size=1, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
+
     model = get_model(args, device, t_to_sigma=t_to_sigma, no_parallel=args.no_parallel)
     optimizer, scheduler = get_optimizer_and_scheduler(args, model, scheduler_mode=args.inference_earlystop_goal if args.val_inference_freq is not None else 'min')
     ema_weights = ExponentialMovingAverage(model.parameters(),decay=args.ema_rate)

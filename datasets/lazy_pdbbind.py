@@ -84,12 +84,15 @@ class LazyPDBBindSet(Dataset):
         cache_idx_path = os.path.join(cache_path, 'index.pkl')
         cache_path = os.path.join(cache_path, 'cache.dat')
         if os.path.exists(cache_idx_path) and os.path.exists(cache_path):
-            print('Cache exists!')
+            print(f"Cache exists! ")
+            print(f"cache_idx_path: {cache_idx_path}")
+            print(f"cache_idx_path: {cache_path}")
             with open(cache_idx_path, 'rb') as cache_idx_file:
                 self.cache_idx = pickle.load(cache_idx_file)
             self.cache_file = open(cache_path, 'rb')
             self.cache = mmap.mmap(self.cache_file.fileno(), 0, flags=mmap.MAP_PRIVATE, prot=mmap.PROT_READ)
             self.complex_names_all = [x for x in self.complex_names_all if x in self.cache_idx]
+            print(f"number of complexes: {len(self.complex_names_all)}")
 
     def __del__(self):
         if self.cache:
@@ -250,7 +253,7 @@ class LazyPDBBindSet(Dataset):
             return None, None
 
         if self.max_receptor_size is not None and complex_graph['receptor'].pos.shape[0] > self.max_receptor_size:
-            print('Skipping {name} because receptor was too large (' + str(complex_graph['receptor'].pos.shape[0]) + ' residues)')
+            print(f"Skipping {name} because receptor was too large (" + str(complex_graph['receptor'].pos.shape[0]) + ' residues)')
             return None, None
         protein_center = torch.mean(complex_graph['receptor'].pos, dim=0, keepdim=True)
         #lig_center = torch.mean(complex_graph['ligand'].pos, dim=0, keepdim=True)

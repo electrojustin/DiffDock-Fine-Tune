@@ -36,6 +36,7 @@ def parse_train_args():
     parser.add_argument('--entity', type=str, default='eac709-nyu', help='wandb account')
     parser.add_argument('--run_name', type=str, default='', help='')
     parser.add_argument('--wandb_id', type=str, default='', help='wandb restart id')
+    parser.add_argument('--group', type=str, default='', help='wandb group')
     parser.add_argument('--cudnn_benchmark', action='store_true', default=False, help='CUDA optimization parameter for faster training')
     parser.add_argument('--num_dataloader_workers', type=int, default=1, help='Number of workers for dataloader')
     parser.add_argument('--dataloader_prefetch_factor', type=int, default=10, help='Prefetch factor for eager dataloading')

@@ -452,7 +452,7 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
                 if failed_convergence_counter > 5:
                     print('failed 5 times - skipping the complex')
                     break
-                print("Exception while running inference on complex:", e)
+                print(f"Exception while running inference on complex: {idx}", e)
                 print(traceback.format_exc())
         if failed_convergence_counter > 5:
             rmsds.extend([100] * args.inference_samples)
