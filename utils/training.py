@@ -446,7 +446,10 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
                                                          tr_schedule=tr_schedule, rot_schedule=rot_schedule,
                                                          tor_schedule=tor_schedule,
                                                          device=device, t_to_sigma=t_to_sigma, model_args=args,
-                                                         t_schedule=t_schedule)
+                                                         t_schedule=t_schedule,
+                                                         temp_sampling=[args.temp_sampling_tr, args.temp_sampling_rot, args.temp_sampling_tor] if args.inf_temp else 1.0,
+                                                         temp_psi=[args.temp_psi_tr, args.temp_psi_rot, args.temp_psi_tor] if args.inf_temp else 0.0 ,
+                                                         temp_sigma_data=[args.temp_sigma_data_tr, args.temp_sigma_data_rot, args.temp_sigma_data_tor] if args.inf_temp else 0.5)
             except Exception as e:
                 failed_convergence_counter += 1
                 if failed_convergence_counter > 5:
