@@ -46,7 +46,7 @@ def get_dataset(args, model_args, confidence=False):
     dataset = LazyPDBBindSet(transform=None, root=args.data_dir, limit_complexes=args.limit_complexes, dataset=args.dataset,
                     chain_cutoff=args.chain_cutoff,
                     receptor_radius=model_args.receptor_radius,
-                    cache_path=args.cache_path, split_path=args.split_path,
+                    cache_path=model_args.cache_path, split_path=args.split_path,
                     remove_hs=model_args.remove_hs, max_lig_size=None,
                     c_alpha_max_neighbors=model_args.c_alpha_max_neighbors,
                     matching=not model_args.no_torsion, keep_original=True,
@@ -101,6 +101,7 @@ if __name__ == '__main__':
     parser.add_argument('--cache_path', type=str, default='data/cache', help='Folder from where to load/restore cached dataset')
     parser.add_argument('--data_dir', type=str, default='../../ligbind/data/BindingMOAD_2020_ab_processed_biounit/', help='Folder containing original structures')
     parser.add_argument('--split_path', type=str, default='data/BindingMOAD_2020_ab_processed/splits/val.txt', help='Path of file defining the split')
+    parser.add_argument('--confidence_cache_path', type=str, default='data/cache', help='Folder from where to load/restore cached dataset')
 
     parser.add_argument('--no_model', action='store_true', default=False, help='Whether to return seed conformer without running model')
     parser.add_argument('--no_random', action='store_true', default=False, help='Whether to add randomness in diffusion steps')
@@ -229,6 +230,8 @@ if __name__ == '__main__':
             score_model_args.not_fixed_center_conv = False
         if not hasattr(score_model_args, 'DDP'):
             score_model_args.DDP = False
+        if hasattr(args, 'cache_path'):
+            score_model_args.cache_path = args.cache_path
     if args.confidence_model_dir is not None:
         with open(f'{args.confidence_model_dir}/model_parameters.yml') as f:
             confidence_args = Namespace(**yaml.full_load(f))
@@ -244,10 +247,13 @@ if __name__ == '__main__':
             confidence_args.num_classification_bins = 2
         if not hasattr(confidence_args, 'DDP'):
             confidence_args.DDP = False
+        if hasattr(args, 'confidence_cache_path'):
+            confidence_args.cache_path = args.confidence_cache_path
 
     if args.num_cpu is not None:
         torch.set_num_threads(args.num_cpu)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     print(f"DiffDock will run on {device}")
     test_dataset = get_dataset(args, score_model_args)
     if args.confidence_model_dir is not None:
@@ -261,7 +267,7 @@ if __name__ == '__main__':
 
     if not args.no_model:
         model = get_model(score_model_args, device, t_to_sigma=t_to_sigma, no_parallel=True, old=args.old_score_model)
-        args.ckpt = 'last_model.pt'
+        # args.ckpt = if args.ckpt 
         state_dict = torch.load(f'{args.model_dir}/{args.ckpt}', map_location=torch.device('cpu'))
         fixed_state_dict = {}
         for key in state_dict.keys():
@@ -370,7 +376,7 @@ if __name__ == '__main__':
     combined_datasets = CombineLazyPDBBindSet(test_dataset, confidence_test_dataset)
     loader = DataLoader(combined_datasets, batch_size=1, num_workers=1, collate_fn=lambda batch: [x for x in batch if x is not None])
 
-    for batch in loader:
+    for batch in tqdm(loader):
         if not batch:
             continue
         _orig_complex_graph, _confidence_graph = batch[0]
@@ -395,9 +401,8 @@ if __name__ == '__main__':
                                    args.pocket_knowledge, args.pocket_cutoff,
                                    initial_noise_std_proportion=args.initial_noise_std_proportion,
                                    choose_residue=args.choose_residue)
-                print(torch.mean(data_list[0]['ligand'].pos, dim=0, keepdim=True))
-                print(torch.mean(data_list[0]['receptor'].pos, dim=0, keepdim=True))
-
+                # print(torch.mean(data_list[0]['ligand'].pos, dim=0, keepdim=True))
+                # print(torch.mean(data_list[0]['receptor'].pos, dim=0, keepdim=True))
 
                 pdb = None
                 if args.save_visualisation:
