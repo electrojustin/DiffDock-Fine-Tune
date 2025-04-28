@@ -377,9 +377,10 @@ def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching,
         if remove_hs: mol_ = RemoveHs(mol_)
         get_lig_graph(mol_, complex_graph)
 
-    edge_mask, mask_rotate = get_transformation_mask(complex_graph)
+    edge_mask, mask_rotate, weight = get_transformation_mask(complex_graph)
     complex_graph['ligand'].edge_mask = torch.tensor(edge_mask)
     complex_graph['ligand'].mask_rotate = mask_rotate
+    complex_graph['ligand'].torsion_weights = weight
 
     return
 

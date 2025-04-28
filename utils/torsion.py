@@ -15,6 +15,7 @@ from utils.geometry import rigid_transform_Kabsch_independent_torch, axis_angle_
 def get_transformation_mask(pyg_data):
     G = to_networkx(pyg_data.to_homogeneous(), to_undirected=False)
     to_rotate = []
+    weights = []
     edges = pyg_data['ligand', 'ligand'].edge_index.T.numpy()
     for i in range(0, edges.shape[0], 2):
         assert edges[i, 0] == edges[i+1, 1]
@@ -22,18 +23,23 @@ def get_transformation_mask(pyg_data):
         G2 = G.to_undirected()
         G2.remove_edge(*edges[i])
         if not nx.is_connected(G2):
+            weight = min(map(lambda x: len(x), nx.connected_components(G2)))
             l = list(sorted(nx.connected_components(G2), key=len)[0])
             if len(l) > 1:
                 if edges[i, 0] in l:
                     to_rotate.append([])
                     to_rotate.append(l)
+                    weights.append(weight)
                 else:
                     to_rotate.append(l)
                     to_rotate.append([])
+                    weights.append(weight)
                 continue
         to_rotate.append([])
         to_rotate.append([])
 
+    weights = torch.tensor(weights)
+    weights = weights / weights.sum()
     mask_edges = np.asarray([0 if len(l) == 0 else 1 for l in to_rotate], dtype=bool)
     mask_rotate = np.zeros((np.sum(mask_edges), len(G.nodes())), dtype=bool)
     idx = 0
@@ -42,7 +48,7 @@ def get_transformation_mask(pyg_data):
             mask_rotate[idx][np.asarray(to_rotate[i], dtype=int)] = True
             idx += 1
 
-    return mask_edges, mask_rotate
+    return mask_edges, mask_rotate, weights
 
 
 def modify_conformer_torsion_angles(pos, edge_index, mask_rotate, torsion_updates, as_numpy=False):
