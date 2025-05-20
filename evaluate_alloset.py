@@ -261,7 +261,7 @@ if __name__ == '__main__':
 
     if not args.no_model:
         model = get_model(score_model_args, device, t_to_sigma=t_to_sigma, no_parallel=True, old=args.old_score_model)
-        #args.ckpt = 'last_model.pt'
+#        args.ckpt = 'last_model.pt'
         state_dict = torch.load(f'{args.model_dir}/{args.ckpt}', map_location=torch.device('cpu'))
         fixed_state_dict = {}
         for key in state_dict.keys():
@@ -270,6 +270,10 @@ if __name__ == '__main__':
         if args.ckpt == 'last_model.pt':
             model_state_dict = state_dict['model']
             ema_weights_state = state_dict['ema_weights']
+            fixed_state_dict = {}
+            for key in model_state_dict.keys():
+                fixed_state_dict[key.replace('module.', '')] = model_state_dict[key]
+            model_state_dict = fixed_state_dict
             model.load_state_dict(model_state_dict, strict=True)
             ema_weights = ExponentialMovingAverage(model.parameters(), decay=score_model_args.ema_rate)
             ema_weights.load_state_dict(ema_weights_state, device=device)

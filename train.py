@@ -131,7 +131,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
         state_dict = model.module.state_dict() if device.type == 'cuda' and not (args.no_parallel or args.DDP) else model.state_dict()
         if args.inference_earlystop_metric in logs.keys() and \
                 (args.inference_earlystop_goal == 'min' and logs[args.inference_earlystop_metric] <= best_val_inference_value or
-                 args.inference_earlystop_goal == 'max' and logs[args.inference_earlystop_metric] >= best_val_inference_value):
+                 args.inference_earlystop_goal == 'max' and logs[args.inference_earlystop_metric] >= best_val_inference_value) and (not args.DDP or args.rank == 0):
             best_val_inference_value = logs[args.inference_earlystop_metric]
             best_val_inference_epoch = epoch
             torch.save(state_dict, os.path.join(run_dir, 'best_inference_epoch_model.pt'))

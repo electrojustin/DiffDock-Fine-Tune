@@ -22,14 +22,21 @@ def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_si
     tr_sigma, rot_sigma, tor_sigma = t_to_sigma(*[data.complex_t[noise_type] for noise_type in ['tr', 'rot', 'tor']])
     mean_dims = (0, 1) if apply_mean else 1
 
-    if weighted_tor:
-        # Average ligand size is 30 heavy atoms. sqrt(30) ~= 5.5
-        if weighted_tor == 1:
-            heavy_atom_factor = math.sqrt(float(data['ligand'].pos.shape[0])) / 5.5
+    if weighted_tor and weighted_tor != 5:
+        tor_weight_factor = 1.0
+        rot_weight_factor = 1.0
+        if weighted_tor == 1 or weighted_tor == 6:
+            # Average ligand size is 30 heavy atoms. sqrt(30) ~= 5.5
+            tor_weight_factor = math.sqrt(float(data['ligand'].pos.shape[0])) / 5.5
+            rot_weight_factor = tor_weight_factor
         elif weighted_tor == 2:
-            heavy_atom_factor = float(data['ligand'].pos.shape[0]) / 30.0
-        rot_weight *= heavy_atom_factor
-        tor_weight *= heavy_atom_factor
+            tor_weight_factor = float(data['ligand'].pos.shape[0]) / 30.0
+            rot_weight_factor = tor_weight_factor
+        elif weighted_tor == 3:
+            # 5.03 is the average number of rotatable bonds
+            tor_weight_factor = float(data['ligand'].torsion_weights.shape[0]) / 5.03
+        rot_weight *= rot_weight_factor
+        tor_weight *= tor_weight_factor
 
     # translation component
     tr_score = data.tr_score # torch.cat([d.tr_score for d in data], dim=0) if device.type == 'cuda' else data.tr_score
@@ -49,8 +56,11 @@ def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_si
         tor_score = data.tor_score
         tor_score_norm2 = torch.tensor(torus.score_norm(edge_tor_sigma.cpu().numpy())).float()
         tor_loss = ((tor_pred.cpu() - tor_score.cpu()) ** 2 / tor_score_norm2)
-        if weighted_tor:
-            torsion_weights = data['ligand'].torsion_weights.cpu()
+        if weighted_tor and weighted_tor != 5:
+            if weighted_tor != 6:
+                torsion_weights = data['ligand'].heuristic_torsion_weights.cpu()
+            else:
+                torsion_weights = data['ligand'].lin_torsion_weights.cpu()
             torsion_weights *= len(torsion_weights)
             tor_loss *= torsion_weights
 
@@ -131,6 +141,8 @@ def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_si
             sidechain_loss, sidechain_base_loss = torch.zeros(len(rot_loss), dtype=torch.float), torch.zeros(
                 len(rot_loss), dtype=torch.float)
 
+    if weighted_tor == 5:
+        tor_loss = torch.where(tor_loss > 1.0, 1.0, tor_loss)
     loss = tr_loss * tr_weight + rot_loss * rot_weight + tor_loss * tor_weight + sidechain_loss * sidechain_weight + backbone_loss * backbone_weight
     return loss, tr_loss.detach(), rot_loss.detach(), tor_loss.detach(), backbone_loss.detach(), sidechain_loss.detach(), \
            tr_base_loss, rot_base_loss, tor_base_loss, backbone_base_loss, sidechain_base_loss
@@ -462,7 +474,9 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
                                                          tor_schedule=tor_schedule,
                                                          device=device, t_to_sigma=t_to_sigma, model_args=args,
                                                          t_schedule=t_schedule,
-                                                         no_kabsch=args.no_kabsch)
+                                                         no_kabsch=args.no_kabsch) 
+                                                         #temp_sampling=[1.170050527854316, 2.06391612594481, 7.044261621607846], temp_psi=[0.727287304570729, 0.9022615585677628, 0.5946212391366862], temp_sigma_data=[0.9299802531572672, 0.7464326999906034, 0.6943254174849822])
+
             except Exception as e:
                 failed_convergence_counter += 1
                 if failed_convergence_counter > 5:
