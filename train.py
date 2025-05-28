@@ -191,26 +191,28 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                     'earlystop_metric': f"{args.inference_earlystop_goal}_{args.inference_earlystop_metric}"
                 }, os.path.join(run_dir, 'best_inference_epoch_model.pt'))
 
-        if args.inference_earlystop_avg_infsteps > 0:
-            if args.inference_earlystop_metric in logs.keys():
-                if isinstance(logs[args.inference_earlystop_metric], list) and (args.inference_earlystop_goal == 'min' and mean(logs[args.inference_earlystop_metric][-args.inference_earlystop_avg_infsteps:],axis=0) <= running_best_val_inference_value or
-                    args.inference_earlystop_goal == 'max' and mean(logs[args.inference_earlystop_metric][-args.inference_earlystop_avg_infsteps:],axis=0) >= running_best_val_inference_value) and (not args.DDP or args.rank == 0):
-                    running_best_val_inference_value = mean(logs[args.inference_earlystop_metric][-args.inference_earlystop_avg_infsteps:],axis=0)
-                    running_best_val_inference_epoch = epoch
+        if args.inference_earlystop_avg_infsteps > 0 and args.inference_earlystop_metric in logs.keys():
+            if args.val_inference_freq != None and (epoch + 1) % args.val_inference_freq == 0:
+                running_val_inference_metric.append(logs[args.inference_earlystop_metric])
+            print("logs", running_val_inference_metric)
+            if (args.inference_earlystop_goal == 'min' and mean(running_val_inference_metric[-args.inference_earlystop_avg_infsteps:],axis=0) <= running_best_val_inference_value or
+                    args.inference_earlystop_goal == 'max' and mean(running_val_inference_metric[-args.inference_earlystop_avg_infsteps:],axis=0) >= running_best_val_inference_value) and (not args.DDP or args.rank == 0):
+                running_best_val_inference_value = mean(running_val_inference_metric[-args.inference_earlystop_avg_infsteps:],axis=0)
+                running_best_val_inference_epoch = epoch
+                torch.save({
+                    'epoch': epoch,
+                    'model': state_dict,
+                    'optimizer': optimizer.state_dict(),
+                    'earlystop_metric': f"avg_{args.inference_earlystop_goal}_{args.inference_earlystop_metric}"
+                }, os.path.join(run_dir, 'running_best_inference_epoch_model.pt'))
+                if epoch > freeze_params:
                     torch.save({
                         'epoch': epoch,
-                        'model': state_dict,
+                        'model': ema_state_dict,
                         'optimizer': optimizer.state_dict(),
-                        'earlystop_metric': f"{args.inference_earlystop_goal}_{args.inference_earlystop_metric}"
+                        'ema_weights': ema_weights.state_dict(),
+                        'earlystop_metric': f"avg_{args.inference_earlystop_goal}_{args.inference_earlystop_metric}"
                     }, os.path.join(run_dir, 'running_best_inference_epoch_model.pt'))
-                    if epoch > freeze_params:
-                        torch.save({
-                            'epoch': epoch,
-                            'model': ema_state_dict,
-                            'optimizer': optimizer.state_dict(),
-                            'ema_weights': ema_weights.state_dict(),
-                            'earlystop_metric': f"{args.inference_earlystop_goal}_{args.inference_earlystop_metric}"
-                        }, os.path.join(run_dir, 'running_best_inference_epoch_model.pt'))
 
 
         if args.inference_secondary_metric is not None and args.inference_secondary_metric in logs.keys() and \
