@@ -6,13 +6,17 @@ import shutil
 from functools import partial
 import cProfile
 import time
+import datetime
 import wandb
 import torch
 import torch.distributed as dist
 import pstats
 import io
+from torch.nn import DataParallel
+from torch.nn.parallel import DistributedDataParallel
+from numpy import mean
 from torch.utils.data.distributed import DistributedSampler
-from datasets.dataloader import DataLoader
+from datasets.dataloader import DataLoader, DataListLoader
 from datasets.lazy_pdbbind import LazyPDBBindSet
 from socket import gethostname
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -26,6 +30,7 @@ from datasets.loader import construct_loader
 from utils.parsing import parse_train_args
 from utils.training import train_epoch, test_epoch, loss_function, loss_function_ddp, inference_epoch_fix
 from utils.utils import save_yaml_file, get_optimizer_and_scheduler, get_model, ExponentialMovingAverage
+
 
 
 def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, pdbbind_loader):
@@ -44,6 +49,13 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
     best_val_secondary_value = math.inf if args.inference_earlystop_goal == 'min' else 0
     best_epoch = 0
     best_val_inference_epoch = 0
+    if args.inference_earlystop_avg_infsteps > 0:
+        running_val_inference_metric = []
+        running_best_val_loss = math.inf
+        running_best_val_inference_value = math.inf if args.inference_earlystop_goal == 'min' else 0
+        running_best_val_secondary_value = math.inf if args.inference_earlystop_goal == 'min' else 0
+        running_best_epoch = 0
+        running_best_val_inferece_epoch = 0
 
     freeze_params = 0
     scheduler_mode = args.inference_earlystop_goal if args.val_inference_freq is not None else 'min'
@@ -51,12 +63,42 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
         freeze_params = args.warmup_dur * (args.num_conv_layers + 2) - 1
         print("Freezing some parameters until epoch {}".format(freeze_params))
 
-    if args.restart_dir:
-        epoch_iter = args.n_epochs_range
-        print(f"Resuming training...Epochs {list(epoch_iter)[0]}–{list(epoch_iter)[-1]}")
-    else:
-        print("Starting training...")
-        epoch_iter = range(args.n_epochs)
+    # if args.restart_dir:
+    epoch_iter = args.n_epochs_range
+    print(f"Doing training...Epochs {list(epoch_iter)[0]}–{list(epoch_iter)[-1]}")
+    # else:
+    #     print("Starting training...")
+    #     epoch_iter = range(args.n_epochs)
+
+    # epoch 0 calculate train/val inference performance
+    logs = {}
+    epoch=list(epoch_iter)[0]-1
+    if args.train_inference_freq != None:
+        inf_metrics = inference_epoch_fix(model, train_loader, args.device, t_to_sigma, args)
+        print("Epoch {}: Train inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
+                .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
+        logs.update({'traininf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
+
+    if args.val_inference_freq != None:
+        inf_metrics = inference_epoch_fix(model, val_loader, args.device, t_to_sigma, args)
+        print("Epoch {}: Val inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
+                .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
+        logs.update({'valinf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
+
+    if args.pdbbind_inference_freq != None:
+        inf_metrics = inference_epoch_fix(model, pdbbind_loader, args.device, t_to_sigma, args)
+        print("Epoch {}: PDBBind inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
+                .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
+        logs.update({'pdbbindinf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
+
+    if args.wandb:
+        if args.DDP:
+            if args.local_rank==0:
+                print("log wandb: rank 0")
+                wandb.log(logs, step=epoch+1)
+        else:
+            wandb.log(logs, step=epoch+1)
+
     for epoch in epoch_iter:
         if epoch % 5 == 0: print("Run name: ", args.run_name)
 
@@ -134,9 +176,44 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                  args.inference_earlystop_goal == 'max' and logs[args.inference_earlystop_metric] >= best_val_inference_value) and (not args.DDP or args.rank == 0):
             best_val_inference_value = logs[args.inference_earlystop_metric]
             best_val_inference_epoch = epoch
-            torch.save(state_dict, os.path.join(run_dir, 'best_inference_epoch_model.pt'))
+            torch.save({
+                'epoch': epoch,
+                'model': state_dict,
+                'optimizer': optimizer.state_dict(),
+                'earlystop_metric': f"{args.inference_earlystop_goal}_{args.inference_earlystop_metric}"
+            }, os.path.join(run_dir, 'best_inference_epoch_model.pt'))
             if epoch > freeze_params:
-                torch.save(ema_state_dict, os.path.join(run_dir, 'best_ema_inference_epoch_model.pt'))
+                torch.save({
+                    'epoch': epoch,
+                    'model': ema_state_dict,
+                    'optimizer': optimizer.state_dict(),
+                    'ema_weights': ema_weights.state_dict(),
+                    'earlystop_metric': f"{args.inference_earlystop_goal}_{args.inference_earlystop_metric}"
+                }, os.path.join(run_dir, 'best_inference_epoch_model.pt'))
+
+        if args.inference_earlystop_avg_infsteps > 0 and args.inference_earlystop_metric in logs.keys():
+            if args.val_inference_freq != None and (epoch + 1) % args.val_inference_freq == 0:
+                running_val_inference_metric.append(logs[args.inference_earlystop_metric])
+            print("logs", running_val_inference_metric)
+            if (args.inference_earlystop_goal == 'min' and mean(running_val_inference_metric[-args.inference_earlystop_avg_infsteps:],axis=0) <= running_best_val_inference_value or
+                    args.inference_earlystop_goal == 'max' and mean(running_val_inference_metric[-args.inference_earlystop_avg_infsteps:],axis=0) >= running_best_val_inference_value) and (not args.DDP or args.rank == 0):
+                running_best_val_inference_value = mean(running_val_inference_metric[-args.inference_earlystop_avg_infsteps:],axis=0)
+                running_best_val_inference_epoch = epoch
+                torch.save({
+                    'epoch': epoch,
+                    'model': state_dict,
+                    'optimizer': optimizer.state_dict(),
+                    'earlystop_metric': f"avg_{args.inference_earlystop_goal}_{args.inference_earlystop_metric}"
+                }, os.path.join(run_dir, 'running_best_inference_epoch_model.pt'))
+                if epoch > freeze_params:
+                    torch.save({
+                        'epoch': epoch,
+                        'model': ema_state_dict,
+                        'optimizer': optimizer.state_dict(),
+                        'ema_weights': ema_weights.state_dict(),
+                        'earlystop_metric': f"avg_{args.inference_earlystop_goal}_{args.inference_earlystop_metric}"
+                    }, os.path.join(run_dir, 'running_best_inference_epoch_model.pt'))
+
 
         if args.inference_secondary_metric is not None and args.inference_secondary_metric in logs.keys() and \
                 (args.inference_earlystop_goal == 'min' and logs[args.inference_secondary_metric] <= best_val_secondary_value or
@@ -227,9 +304,10 @@ def main_function():
             'settings':wandb.Settings(start_method="fork"),
             'project':args.project,
             'name':args.run_name,
+            'group':args.group,
             'config':args,
         }
-        if args.restart_dir: 
+        if args.restart_dir and args.wandb_id: 
             print(f"resume wandb run: {args.wandb_id}")
             wandb_args.update({
                 "id":args.wandb_id,
@@ -255,57 +333,93 @@ def main_function():
                                all_atom=args.all_atoms, alpha=args.sampling_alpha, beta=args.sampling_beta,
                                include_miscellaneous_atoms=False if not hasattr(args, 'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
                                crop_beyond_cutoff=args.crop_beyond)
-    pdbbind_common_args = {'transform': transform, 'limit_complexes': args.limit_complexes,
-                       'chain_cutoff': args.chain_cutoff, 'receptor_radius': args.receptor_radius,
-                       'c_alpha_max_neighbors': args.c_alpha_max_neighbors,
-                       'remove_hs': args.remove_hs, 'max_lig_size': args.max_lig_size,
-                       'matching': not args.no_torsion, 'popsize': args.matching_popsize, 'maxiter': args.matching_maxiter,
-                       'num_workers': args.num_workers, 'all_atoms': args.all_atoms,
-                       'atom_radius': args.atom_radius, 'atom_max_neighbors': args.atom_max_neighbors,
-                       'knn_only_graph': False if not hasattr(args, 'not_knn_only_graph') else not args.not_knn_only_graph,
-                       'include_miscellaneous_atoms': False if not hasattr(args, 'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
-                       'matching_tries': args.matching_tries}
-    pdbbind_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', cache_path='data/pdbbind_test_cache', split_path='data/splits/timesplit_test', keep_original=True, esm_embeddings_path='data/esm_embedding_output', root='data/PDBBind_processed/', protein_file='protein', require_ligand=True, max_receptor_size=500, **pdbbind_common_args)
-    pdbbind_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=pdbbind_dataset, batch_size=1, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(pdbbind_dataset), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('pdb_dataloader_'+str(worker_id)))
     
+    if args.pdbbind_inference_freq:
+        pdbbind_common_args = {'transform': transform, 'limit_complexes': args.limit_complexes,
+                        'chain_cutoff': args.chain_cutoff, 'receptor_radius': args.receptor_radius,
+                        'c_alpha_max_neighbors': args.c_alpha_max_neighbors,
+                        'remove_hs': args.remove_hs, 'max_lig_size': args.max_lig_size,
+                        'matching': not args.no_torsion, 'popsize': args.matching_popsize, 'maxiter': args.matching_maxiter,
+                        'num_workers': args.num_workers, 'all_atoms': args.all_atoms,
+                        'atom_radius': args.atom_radius, 'atom_max_neighbors': args.atom_max_neighbors,
+                        'knn_only_graph': False if not hasattr(args, 'not_knn_only_graph') else not args.not_knn_only_graph,
+                        'include_miscellaneous_atoms': False if not hasattr(args, 'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
+                        'matching_tries': args.matching_tries}
+        pdbbind_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', \
+            cache_path=args.pdbbind_inf_cache_path, \
+            split_path=args.pdbbind_inf_split_path, \
+            keep_original=True, \
+            esm_embeddings_path=args.pdbbind_inf_esm_embeddings_path,\
+            root=args.pdbbind_inf_root, \
+            protein_file='protein', require_ligand=True, max_receptor_size=500, **pdbbind_common_args)
+        if args.DDP:
+            pdbbind_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=pdbbind_dataset, batch_size=1, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(pdbbind_dataset), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('pdb_dataloader_'+str(worker_id)))
+        else:
+            pdbbind_loader = DataListLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=pdbbind_dataset, batch_size=1, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
+    else:
+        pdbbind_loader = None
+
     model = get_model(args, device, t_to_sigma=t_to_sigma, no_parallel=args.no_parallel)
     optimizer, scheduler = get_optimizer_and_scheduler(args, model, scheduler_mode='min') #args.inference_earlystop_goal if args.val_inference_freq is not None else 'min')
     ema_weights = ExponentialMovingAverage(model.parameters(),decay=args.ema_rate)
 
     if args.restart_dir:
         try:
-            dict = torch.load(f'{args.restart_dir}/{args.restart_ckpt}.pt', map_location=torch.device('cpu'))
-            if args.restart_lr is not None: dict['optimizer']['param_groups'][0]['lr'] = args.restart_lr
-            optimizer.load_state_dict(dict['optimizer'])
-            model.load_state_dict(dict['model'], strict=True)
+            print(f'{args.restart_dir}/{args.restart_ckpt}.pt')
+            chkpt = torch.load(f'{args.restart_dir}/{args.restart_ckpt}.pt', map_location=torch.device('cpu'))
+            if args.restart_lr is not None: chkpt['optimizer']['param_groups'][0]['lr'] = args.restart_lr
+            optimizer.load_state_dict(chkpt['optimizer'])
+            model.load_state_dict(chkpt['model'], strict=True)
             if hasattr(args, 'ema_rate'):
-                ema_weights.load_state_dict(dict['ema_weights'], device=device)
-            print("Restarting from epoch", dict['epoch'])
-            assert args.n_epochs > dict['epoch']
-            args.n_epochs_range = range(dict['epoch'], args.n_epochs)
+                ema_weights.load_state_dict(chkpt['ema_weights'], device=device)
+            print("Restarting from epoch", chkpt['epoch'])
+            assert args.n_epochs > chkpt['epoch']
+            args.n_epochs_range = range(chkpt['epoch'], args.n_epochs)
         except Exception as e:
             print("Exception", e)
-            dict = torch.load(f'{args.restart_dir}/best_model.pt', map_location=torch.device('cpu'))
-            model.load_state_dict(dict, strict=True)
+            chkpt = torch.load(f'{args.restart_dir}/{args.restart_ckpt}.pt', map_location=torch.device('cpu'))
+            if isinstance(model, (DataParallel, DistributedDataParallel)):
+                model.module.load_state_dict(chkpt, strict=True)
+            else:
+                model.load_state_dict(chkpt, strict=True)
+            # model.load_state_dict(dict, strict=True)
+            args.n_epochs_range = range(0, args.n_epochs)
             print("Due to exception had to take the best epoch and no optimiser")
     elif args.pretrain_dir:
-        dict = torch.load(f'{args.pretrain_dir}/{args.pretrain_ckpt}.pt', map_location=torch.device('cpu'))
-        fixed_state_dict = {}
-        for key in dict.keys():
-            fixed_state_dict[key.replace('module.', '')] = dict[key]
-        dict = fixed_state_dict
-        model.module.load_state_dict(dict, strict=True)
+        chkpt = torch.load(f'{args.pretrain_dir}/{args.pretrain_ckpt}.pt', map_location=torch.device('cpu'))
+        if 'epoch' in chkpt.keys():
+            args.n_epochs_range = range(chkpt['epoch'], args.n_epochs)
+        else:
+            args.n_epochs_range = range(0, args.n_epochs)
+        print(args.n_epochs_range)
+        if "model" in chkpt.keys():
+            for key in ["optimizer", "ema_weights", "epoch"]:
+                if key in chkpt.keys():
+                    del chkpt[key]
+            try:
+                model.module.load_state_dict(chkpt["model"], strict=True)
+            except:
+                model.load_state_dict(chkpt["model"], strict=True)
+        else:
+            try:
+                model.module.load_state_dict(chkpt, strict=True)
+            except:
+                model.load_state_dict(chkpt, strict=True)
+        # try:
+        #     model.module.load_state_dict(chkpt, strict=True)
+        # except:
+        #     model.load_state_dict(chkpt, strict=True)
         print("Using pretrained model", f'{args.pretrain_dir}/{args.pretrain_ckpt}.pt')
 
     numel = sum([p.numel() for p in model.parameters()])
     print('Model with', numel, 'parameters')
 
-    if args.wandb:
-        if args.DDP:
-            if args.local_rank==0:
-                wandb.log({'numel': numel})
-        else:
-            wandb.log({'numel': numel})
+    # if args.wandb:
+    #     if args.DDP:
+    #         if args.local_rank==0:
+    #             wandb.log({'numel': numel})
+    #     else:
+    #         wandb.log({'numel': numel})
 
     run_dir = os.path.join(args.log_dir, args.run_name)
     args.device = device
@@ -335,7 +449,7 @@ def main_function():
 
 def setup(rank, world_size):
     # initialize the process group
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    dist.init_process_group("nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(seconds=5400))
 
 if __name__ == '__main__':
     print("Using", torch.cuda.device_count(), "GPUs!")

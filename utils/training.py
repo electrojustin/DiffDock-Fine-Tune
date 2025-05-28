@@ -484,15 +484,15 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
                                                          tor_schedule=tor_schedule,
                                                          device=device, t_to_sigma=t_to_sigma, model_args=args,
                                                          t_schedule=t_schedule,
-                                                         no_kabsch=args.no_kabsch) 
-                                                         #temp_sampling=[1.170050527854316, 2.06391612594481, 7.044261621607846], temp_psi=[0.727287304570729, 0.9022615585677628, 0.5946212391366862], temp_sigma_data=[0.9299802531572672, 0.7464326999906034, 0.6943254174849822])
-
+                                                         temp_sampling=[args.temp_sampling_tr, args.temp_sampling_rot, args.temp_sampling_tor] if args.inf_temp else 1.0,
+                                                         temp_psi=[args.temp_psi_tr, args.temp_psi_rot, args.temp_psi_tor] if args.inf_temp else 0.0 ,
+                                                         temp_sigma_data=[args.temp_sigma_data_tr, args.temp_sigma_data_rot, args.temp_sigma_data_tor] if args.inf_temp else 0.5)
             except Exception as e:
                 failed_convergence_counter += 1
                 if failed_convergence_counter > 5:
                     print('failed 5 times - skipping the complex')
                     break
-                print("Exception while running inference on complex:", e)
+                print(f"Exception while running inference on complex: {idx}", e)
                 print(traceback.format_exc())
         if failed_convergence_counter > 5:
             rmsds.extend([100] * args.inference_samples)
