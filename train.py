@@ -6,14 +6,17 @@ import shutil
 from functools import partial
 import cProfile
 import time
+import datetime
 import wandb
 import torch
 import torch.distributed as dist
 import pstats
 import io
+from torch.nn import DataParallel
+from torch.nn.parallel import DistributedDataParallel
 from numpy import mean
 from torch.utils.data.distributed import DistributedSampler
-from datasets.dataloader import DataLoader
+from datasets.dataloader import DataLoader, DataListLoader
 from datasets.lazy_pdbbind import LazyPDBBindSet
 from socket import gethostname
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -299,9 +302,10 @@ def main_function():
             'settings':wandb.Settings(start_method="fork"),
             'project':args.project,
             'name':args.run_name,
+            'group':args.group,
             'config':args,
         }
-        if args.restart_dir: 
+        if args.restart_dir and args.wandb_id: 
             print(f"resume wandb run: {args.wandb_id}")
             wandb_args.update({
                 "id":args.wandb_id,
@@ -408,12 +412,12 @@ def main_function():
     numel = sum([p.numel() for p in model.parameters()])
     print('Model with', numel, 'parameters')
 
-    if args.wandb:
-        if args.DDP:
-            if args.local_rank==0:
-                wandb.log({'numel': numel})
-        else:
-            wandb.log({'numel': numel})
+    # if args.wandb:
+    #     if args.DDP:
+    #         if args.local_rank==0:
+    #             wandb.log({'numel': numel})
+    #     else:
+    #         wandb.log({'numel': numel})
 
     run_dir = os.path.join(args.log_dir, args.run_name)
     args.device = device
@@ -443,7 +447,7 @@ def main_function():
 
 def setup(rank, world_size):
     # initialize the process group
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    dist.init_process_group("nccl", rank=rank, world_size=world_size, timeout=datetime.timedelta(seconds=5400))
 
 if __name__ == '__main__':
     print("Using", torch.cuda.device_count(), "GPUs!")

@@ -1,5 +1,5 @@
 
-from argparse import ArgumentParser,FileType
+from argparse import ArgumentParser,FileType, Action
 
 def parse_train_args():
 
@@ -22,7 +22,6 @@ def parse_train_args():
     parser.add_argument('--split_test', type=str, default='data/splits/timesplit_test', help='Path of file defining the split')
     parser.add_argument('--test_sigma_intervals', action='store_true', default=False, help='Whether to log loss per noise interval')
     parser.add_argument('--val_inference_freq', type=int, default=None, help='Frequency of epochs for which to run expensive inference on val data')
-    parser.add_argument('--pdbbind_inference_freq', type=int, default=None, help='')
     parser.add_argument('--save_model_freq', type=int, default=None, help='')
     parser.add_argument('--inference_samples', type=int, default=5, help='')
     parser.add_argument('--train_inference_freq', type=int, default=None, help='Frequency of epochs for which to run expensive inference on train data')
@@ -47,6 +46,22 @@ def parse_train_args():
     parser.add_argument('--double_val', action='store_true', default=False, help='')
     parser.add_argument('--rerun_val', action='store_true', default=False, help='Rerun complexes from the training set as a validation set to debug')
     parser.add_argument('--combined_training', action='store_true', default=False, help='')
+
+    # PDBBind_inference_dataset
+    class StoreNoneIfNotRaised(Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            if values is None:
+                setattr(namespace, self.dest, None)
+            else:
+                setattr(namespace, self.dest, values)
+
+    parser.add_argument('--pdbbind_inference_freq', type=int, default=None, help='')
+    parser.add_argument('--pdbbind_inf_cache_path', type=str, default='/scratch/projects/yzlab/group/kinase_eric/kinase_location_classifier/jeg10045_kinase_scripts/diffdock/DiffDock/data/pdbbind_test_cache', action=StoreNoneIfNotRaised, help='Stores None if not raised')
+    parser.add_argument('--pdbbind_inf_split_path', type=str, default='/scratch/projects/yzlab/group/kinase_eric/kinase_location_classifier/jeg10045_kinase_scripts/diffdock/DiffDock/data/splits/timesplit_test', action=StoreNoneIfNotRaised, help='Stores None if not raised')
+    parser.add_argument('--pdbbind_inf_esm_embeddings_path', type=str, default='/scratch/projects/yzlab/group/kinase_eric/kinase_location_classifier/jeg10045_kinase_scripts/diffdock/DiffDock/data/esm_embedding_output', action=StoreNoneIfNotRaised, help='Stores None if not raised')
+    parser.add_argument('--pdbbind_inf_root', type=str, default='/scratch/projects/yzlab/group/kinase_eric/kinase_location_classifier/jeg10045_kinase_scripts/diffdock/DiffDock/data/PDBBind_processed/', action=StoreNoneIfNotRaised, help='Stores None if not raised')
+
+    parser.add_argument('--inf_temp', action='store_true', default=False, help='include temperature sampling/psi/sigma from default params into the inference epoch stage')
 
     # Training arguments
     parser.add_argument('--n_epochs', type=int, default=400, help='Number of epochs for training')
