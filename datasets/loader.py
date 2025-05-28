@@ -50,7 +50,7 @@ def construct_loader(args, t_to_sigma, device):
     transform = NoiseTransform(t_to_sigma=t_to_sigma, no_torsion=args.no_torsion,
                                all_atom=args.all_atoms, alpha=args.sampling_alpha, beta=args.sampling_beta,
                                include_miscellaneous_atoms=False if not hasattr(args, 'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
-                               crop_beyond_cutoff=args.crop_beyond)
+                               crop_beyond_cutoff=args.crop_beyond, no_kabsch=args.no_kabsch)
     if args.triple_training: assert args.combined_training
 
     sequences_to_embeddings = None
@@ -137,7 +137,7 @@ def construct_loader(args, t_to_sigma, device):
 
     if args.DDP:
         train_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(train_dataset), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('dataloader_'+str(worker_id)))
-        val_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(val_dataset), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('dataloader_'+str(worker_id)))
+        val_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(val_dataset, shuffle=False), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('dataloader_'+str(worker_id)))
     else:
         train_loader = loader_class(prefetch_factor=args.dataloader_prefetch_factor, dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
         val_loader = loader_class(prefetch_factor=args.dataloader_prefetch_factor, dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=False, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)

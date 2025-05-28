@@ -75,7 +75,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                                                                optimizer=optimizer)
 
         logs = {}
-        train_losses = train_epoch(model, train_loader, optimizer, args.device, t_to_sigma, loss_fn, ema_weights if epoch > freeze_params else None)
+        train_losses = train_epoch(model, train_loader, optimizer, args.device, t_to_sigma, loss_fn, ema_weights if epoch > freeze_params else None, weighted_tor=args.weighted_tor)
         # number of tdqm batches = len(train_dataset) / (args.batch_size)
         
         print("Epoch {}: Training loss {:.4f}  tr {:.4f}   rot {:.4f}   tor {:.4f}   sc {:.4f}  lr {:.4f}"
@@ -85,23 +85,23 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
         if epoch > freeze_params:
             ema_weights.store(model.parameters())
             if args.use_ema: ema_weights.copy_to(model.parameters()) # load ema parameters into model for running validation and inference
-        val_losses = test_epoch(model, val_loader, args.device, t_to_sigma, loss_fn, args.test_sigma_intervals)
+        val_losses = test_epoch(model, val_loader, args.device, t_to_sigma, loss_fn, args.test_sigma_intervals, args.weighted_tor)
         print("Epoch {}: Validation loss {:.4f}  tr {:.4f}   rot {:.4f}   tor {:.4f}   sc {:.4f}"
               .format(epoch, val_losses['loss'], val_losses['tr_loss'], val_losses['rot_loss'], val_losses['tor_loss'], val_losses['sidechain_loss']))
 
-        if args.train_inference_freq != None and epoch % args.train_inference_freq == 0:
+        if args.train_inference_freq != None and (epoch + 1) % args.train_inference_freq == 0:
             inf_metrics = inference_epoch_fix(model, train_loader, args.device, t_to_sigma, args)
             print("Epoch {}: Train inference rmsd_median {:.3f} rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f} centroid_median {:.3f} centroid_lt2 {:.3f} centroid_lt5 {:.3f} min_centroid_lt2 {:.3f} min_centroid_lt5 {:.3f}"
                   .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
             logs.update({'traininf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
-        if args.val_inference_freq != None and epoch % args.val_inference_freq == 0:
+        if args.val_inference_freq != None and (epoch + 1) % args.val_inference_freq == 0:
             inf_metrics = inference_epoch_fix(model, val_loader, args.device, t_to_sigma, args)
             print("Epoch {}: Val inference rmsd_median {:.3f} rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f} centroid_median {:.3f} centroid_lt2 {:.3f} centroid_lt5 {:.3f} min_centroid_lt2 {:.3f} min_centroid_lt5 {:.3f}"
                   .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
             logs.update({'valinf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
-        if args.pdbbind_inference_freq != None and epoch % args.pdbbind_inference_freq == 0:
+        if args.pdbbind_inference_freq != None and (epoch + 1) % args.pdbbind_inference_freq == 0:
             inf_metrics = inference_epoch_fix(model, pdbbind_loader, args.device, t_to_sigma, args)
             print("Epoch {}: PDBBind inference rmsd_median {:.3f} rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f} centroid_median {:.3f} centroid_lt2 {:.3f} centroid_lt5 {:.3f} min_centroid_lt2 {:.3f} min_centroid_lt5 {:.3f}"
                   .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
@@ -131,7 +131,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
         state_dict = model.module.state_dict() if device.type == 'cuda' and not (args.no_parallel or args.DDP) else model.state_dict()
         if args.inference_earlystop_metric in logs.keys() and \
                 (args.inference_earlystop_goal == 'min' and logs[args.inference_earlystop_metric] <= best_val_inference_value or
-                 args.inference_earlystop_goal == 'max' and logs[args.inference_earlystop_metric] >= best_val_inference_value):
+                 args.inference_earlystop_goal == 'max' and logs[args.inference_earlystop_metric] >= best_val_inference_value) and (not args.DDP or args.rank == 0):
             best_val_inference_value = logs[args.inference_earlystop_metric]
             best_val_inference_epoch = epoch
             torch.save(state_dict, os.path.join(run_dir, 'best_inference_epoch_model.pt'))
@@ -159,10 +159,11 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
         if scheduler:
             if epoch < freeze_params or (args.scheduler == 'linear_warmup' and epoch < args.warmup_dur):
                 scheduler.step()
-            elif args.val_inference_freq is not None:
-                scheduler.step(best_val_inference_value)
+            #elif args.val_inference_freq is not None:
+            #    scheduler.step(best_val_inference_value)
             else:
-                scheduler.step(val_losses['loss'])
+                scheduler.step(train_losses['loss'])
+                #scheduler.step(val_losses['loss'])
 
         if not args.DDP or args.rank == 0:
             torch.save({
@@ -190,8 +191,8 @@ def main_function():
                 arg_dict[key] = value
         args.config = args.config.name
     assert (args.inference_earlystop_goal == 'max' or args.inference_earlystop_goal == 'min')
-    if args.val_inference_freq is not None and args.scheduler is not None:
-        assert (args.scheduler_patience > args.val_inference_freq) # otherwise we will just stop training after args.scheduler_patience epochs
+#    if args.val_inference_freq is not None and args.scheduler is not None:
+#        assert (args.scheduler_patience > args.val_inference_freq) # otherwise we will just stop training after args.scheduler_patience epochs
     if args.cudnn_benchmark:
         torch.backends.cudnn.benchmark = True
 
@@ -268,7 +269,7 @@ def main_function():
     pdbbind_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=pdbbind_dataset, batch_size=1, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(pdbbind_dataset), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('pdb_dataloader_'+str(worker_id)))
     
     model = get_model(args, device, t_to_sigma=t_to_sigma, no_parallel=args.no_parallel)
-    optimizer, scheduler = get_optimizer_and_scheduler(args, model, scheduler_mode=args.inference_earlystop_goal if args.val_inference_freq is not None else 'min')
+    optimizer, scheduler = get_optimizer_and_scheduler(args, model, scheduler_mode='min') #args.inference_earlystop_goal if args.val_inference_freq is not None else 'min')
     ema_weights = ExponentialMovingAverage(model.parameters(),decay=args.ema_rate)
 
     if args.restart_dir:
@@ -289,6 +290,10 @@ def main_function():
             print("Due to exception had to take the best epoch and no optimiser")
     elif args.pretrain_dir:
         dict = torch.load(f'{args.pretrain_dir}/{args.pretrain_ckpt}.pt', map_location=torch.device('cpu'))
+        fixed_state_dict = {}
+        for key in dict.keys():
+            fixed_state_dict[key.replace('module.', '')] = dict[key]
+        dict = fixed_state_dict
         model.module.load_state_dict(dict, strict=True)
         print("Using pretrained model", f'{args.pretrain_dir}/{args.pretrain_ckpt}.pt')
 

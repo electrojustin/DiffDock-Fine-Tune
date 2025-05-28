@@ -18,7 +18,61 @@ from datasets.constants import aa_short2long, atom_order, three_to_one
 from datasets.parse_chi import get_chi_angles, get_coords, aa_idx2aa_short, get_onehot_sequence
 from utils.torsion import get_transformation_mask
 from utils.logging_utils import get_logger
+from utils.geometry import rigid_transform_Kabsch_3D_torch
+from utils.torsion import modify_conformer_torsion_angles
 
+def randomize_tor_angles(complex_graph):
+    torsion_updates = np.random.uniform(low=-np.pi, high=np.pi, size=complex_graph['ligand'].edge_mask.sum())
+    complex_graph['ligand'].pos = modify_conformer_torsion_angles(
+                                        complex_graph['ligand'].pos,
+                                        complex_graph[('ligand', 'ligand')].edge_index.T[complex_graph['ligand'].edge_mask],
+                                        complex_graph['ligand'].mask_rotate, torsion_updates)
+    rot, tr = rigid_transform_Kabsch_3D_torch(complex_graph['ligand'].pos.T, torch.tensor(complex_graph['ligand'].orig_pos, dtype=torch.float32).T)
+    complex_graph['ligand'].pos = complex_graph['ligand'].pos @ rot.T + tr.T
+    return torsion_updates
+
+
+def create_tor_model(complex_graph, trials=1000):
+    tor_updates = []
+    rmsds = []
+    for i in range(0, trials):
+        tor_update = randomize_tor_angles(complex_graph)
+        rmsd = np.sqrt(((complex_graph['ligand'].pos.cpu().numpy() - complex_graph['ligand'].orig_pos) ** 2).sum(axis=1).mean())
+        tor_updates.append(tor_update)
+        rmsds.append(rmsd)
+        complex_graph['ligand'].pos = torch.tensor(complex_graph['ligand'].orig_pos, dtype=torch.float32)
+    tor_updates = np.array(tor_updates)
+    rmsds = np.array(rmsds)
+
+    tor_model = torch.nn.Sequential(
+            torch.nn.Linear(tor_updates.shape[1], tor_updates.shape[1]),
+            torch.nn.Sigmoid(),
+            torch.nn.Linear(tor_updates.shape[1], tor_updates.shape[1]),
+            torch.nn.Sigmoid(),
+            torch.nn.Linear(tor_updates.shape[1], 1),
+    )
+    max_rmsd = max(rmsds)
+    loss_fn = torch.nn.MSELoss(reduction='sum')
+    optimizer = torch.optim.Adam(tor_model.parameters(), lr=0.01)
+    tor_updates_tensor = torch.tensor(tor_updates, dtype=torch.float32)
+    rmsds_tensor = torch.tensor(rmsds, dtype=torch.float32)
+    for i in range(0, 100):
+        pred = tor_model(tor_updates_tensor)[0] * max_rmsd
+        loss = loss_fn(pred, rmsds_tensor)
+        if i == 99:
+            print('nn mse: ' + str(loss.item()))
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    tor_updates = tor_updates ** 2
+    m, r, _, _ = np.linalg.lstsq(tor_updates, rmsds)
+    print('linear mse: ' + str(r))
+    m = torch.tensor(m, dtype=torch.float32)
+    lower_threshold = 0.01
+    m = torch.where(m > lower_threshold, m, lower_threshold)
+    m = m / m.sum()
+    return m, tor_model
 
 periodic_table = GetPeriodicTable()
 allowable_features = {
@@ -377,9 +431,14 @@ def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching,
         if remove_hs: mol_ = RemoveHs(mol_)
         get_lig_graph(mol_, complex_graph)
 
-    edge_mask, mask_rotate = get_transformation_mask(complex_graph)
+    edge_mask, mask_rotate, weight = get_transformation_mask(complex_graph)
     complex_graph['ligand'].edge_mask = torch.tensor(edge_mask)
     complex_graph['ligand'].mask_rotate = mask_rotate
+    complex_graph['ligand'].heuristic_torsion_weights = weight
+    lin_model, nn_model = create_tor_model(complex_graph)
+    complex_graph['ligand'].lin_torsion_weights = lin_model
+    #print(list(nn_model.parameters()))
+    complex_graph['ligand'].nn_torsion_model = list(map(lambda x: x.data, nn_model.parameters()))
 
     return
 

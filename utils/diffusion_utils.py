@@ -32,7 +32,7 @@ def t_to_sigma(t_tr, t_rot, t_tor, args):
     return tr_sigma, rot_sigma, tor_sigma
 
 
-def modify_conformer(data, tr_update, rot_update, torsion_updates, pivot=None):
+def modify_conformer(data, tr_update, rot_update, torsion_updates, pivot=None, no_kabsch=False):
     lig_center = torch.mean(data['ligand'].pos, dim=0, keepdim=True)
     rot_mat = axis_angle_to_matrix(rot_update.squeeze())
     rigid_new_pos = (data['ligand'].pos - lig_center) @ rot_mat.T + tr_update + lig_center
@@ -42,14 +42,16 @@ def modify_conformer(data, tr_update, rot_update, torsion_updates, pivot=None):
                                                            data['ligand', 'ligand'].edge_index.T[data['ligand'].edge_mask],
                                                            data['ligand'].mask_rotate if isinstance(data['ligand'].mask_rotate, np.ndarray) else data['ligand'].mask_rotate[0],
                                                            torsion_updates).to(rigid_new_pos.device)
-        if pivot is None:
+        if pivot is None and not no_kabsch:
             R, t = rigid_transform_Kabsch_3D_torch(flexible_new_pos.T, rigid_new_pos.T)
             aligned_flexible_pos = flexible_new_pos @ R.T + t.T
-        else:
+        elif not no_kabsch:
             R1, t1 = rigid_transform_Kabsch_3D_torch(pivot.T, rigid_new_pos.T)
             R2, t2 = rigid_transform_Kabsch_3D_torch(flexible_new_pos.T, pivot.T)
 
             aligned_flexible_pos = (flexible_new_pos @ R2.T + t2.T) @ R1.T + t1.T
+        else:
+            aligned_flexible_pos = flexible_new_pos
 
         data['ligand'].pos = aligned_flexible_pos
     else:
@@ -57,7 +59,7 @@ def modify_conformer(data, tr_update, rot_update, torsion_updates, pivot=None):
     return data
 
 
-def modify_conformer_batch(orig_pos, data, tr_update, rot_update, torsion_updates, mask_rotate):
+def modify_conformer_batch(orig_pos, data, tr_update, rot_update, torsion_updates, mask_rotate, no_kabsch=False):
     B = data.num_graphs
     N, M, R = data['ligand'].num_nodes // B, data['ligand', 'ligand'].num_edges // B, data['ligand'].edge_mask.sum().item() // B
 
@@ -70,8 +72,11 @@ def modify_conformer_batch(orig_pos, data, tr_update, rot_update, torsion_update
 
     if torsion_updates is not None:
         flexible_new_pos = modify_conformer_torsion_angles_batch(rigid_new_pos, edge_index.T[edge_mask], mask_rotate, torsion_updates)
-        R, t = rigid_transform_Kabsch_3D_torch_batch(flexible_new_pos, rigid_new_pos)
-        aligned_flexible_pos = torch.bmm(flexible_new_pos, R.transpose(1, 2)) + t.transpose(1, 2)
+        if not no_kabsch:
+            R, t = rigid_transform_Kabsch_3D_torch_batch(flexible_new_pos, rigid_new_pos)
+            aligned_flexible_pos = torch.bmm(flexible_new_pos, R.transpose(1, 2)) + t.transpose(1, 2)
+        else:
+            aligned_flexible_pos = flexible_new_pos
         final_pos = aligned_flexible_pos.reshape(-1, 3)
     else:
         final_pos = rigid_new_pos.reshape(-1, 3)
