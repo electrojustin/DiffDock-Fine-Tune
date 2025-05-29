@@ -189,7 +189,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                     'optimizer': optimizer.state_dict(),
                     'ema_weights': ema_weights.state_dict(),
                     'earlystop_metric': f"{args.inference_earlystop_goal}_{args.inference_earlystop_metric}"
-                }, os.path.join(run_dir, 'best_inference_epoch_model.pt'))
+                }, os.path.join(run_dir, 'best_ema_inference_epoch_model.pt'))
 
         if args.inference_earlystop_avg_infsteps > 0 and args.inference_earlystop_metric in logs.keys():
             if args.val_inference_freq != None and (epoch + 1) % args.val_inference_freq == 0:
@@ -212,7 +212,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                         'optimizer': optimizer.state_dict(),
                         'ema_weights': ema_weights.state_dict(),
                         'earlystop_metric': f"avg_{args.inference_earlystop_goal}_{args.inference_earlystop_metric}"
-                    }, os.path.join(run_dir, 'running_best_inference_epoch_model.pt'))
+                    }, os.path.join(run_dir, 'running_ema_best_inference_epoch_model.pt'))
 
 
         if args.inference_secondary_metric is not None and args.inference_secondary_metric in logs.keys() and \
