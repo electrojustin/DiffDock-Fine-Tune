@@ -38,9 +38,11 @@ class LazyPDBBindSet(Dataset):
                  slurm_array_idx=None,
                  slurm_array_task_count=None,
                  max_receptor_size=None,
-                 knn_only_graph=False, matching_tries=1, dataset='AlloSet'):
+                 knn_only_graph=False, matching_tries=1, dataset='AlloSet',
+                 skip_tor_model=False):
 
         super(LazyPDBBindSet, self).__init__(root, transform)
+        self.skip_tor_model = skip_tor_model
         self.smile_file = smile_file
         self.ligand_smiles = {}
         self.slurm_array_idx = slurm_array_idx
@@ -232,7 +234,7 @@ class LazyPDBBindSet(Dataset):
             complex_graph = HeteroData()
             complex_graph['name'] = name
             get_lig_graph_with_matching(lig, complex_graph, self.popsize, self.maxiter, self.matching, self.keep_original,
-                                        self.num_conformers, remove_hs=self.remove_hs, tries=self.matching_tries)
+                                        self.num_conformers, remove_hs=self.remove_hs, tries=self.matching_tries, skip_tor_model=self.skip_tor_model)
 
             moad_extract_receptor_structure(path=os.path.join(self.pdbbind_dir, name, f'{pdb}_{self.protein_file}.pdb'),
                                             complex_graph=complex_graph,
