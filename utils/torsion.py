@@ -38,8 +38,8 @@ def get_transformation_mask(pyg_data):
         to_rotate.append([])
         to_rotate.append([])
 
-    weights = torch.tensor(weights)
-    weights = weights / weights.sum()
+    weights = torch.tensor(weights, dtype=torch.float32)
+    weights = weights / weights.mean(dtype=torch.float32)
     mask_edges = np.asarray([0 if len(l) == 0 else 1 for l in to_rotate], dtype=bool)
     mask_rotate = np.zeros((np.sum(mask_edges), len(G.nodes())), dtype=bool)
     idx = 0
