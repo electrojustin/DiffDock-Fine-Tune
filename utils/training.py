@@ -16,7 +16,7 @@ from torch.nn.functional import linear, sigmoid, leaky_relu
 
 
 def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_sigma, device, tr_weight=1, rot_weight=1,
-                  tor_weight=1, backbone_weight=0, sidechain_weight=0, apply_mean=True, no_torsion=False, weighted_tor=False):
+                  tor_weight=1, backbone_weight=0, sidechain_weight=0, apply_mean=True, no_torsion=False, weighted_tor=False, cos_loss=False):
     ## the original DiffDock uses DataParallel and DataListLoader to pass in data in the form of a list
     ## thus this code is written in the anticipation that the data will be a list
     ## this loss_function should be rewritten to handle a HeteroDataBatch from DataLoader
@@ -35,7 +35,7 @@ def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_si
             rot_weight_factor = tor_weight_factor
         elif weighted_tor == 3:
             # 5.03 is the average number of rotatable bonds
-            tor_weight_factor = float(data['ligand'].torsion_weights.shape[0]) / 5.03
+            tor_weight_factor = float(data['ligand'].heuristic_torsion_weights.shape[0]) / 5.03
         rot_weight *= rot_weight_factor
         tor_weight *= tor_weight_factor
 
@@ -48,7 +48,10 @@ def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_si
     # rotation component
     rot_score = data.rot_score
     rot_score_norm = so3.score_norm(rot_sigma.cpu()).unsqueeze(-1)
-    rot_loss = (((rot_pred.cpu() - rot_score.cpu()) / rot_score_norm) ** 2).mean(dim=mean_dims)
+    if not cos_loss:
+        rot_loss = (((rot_pred.cpu() - rot_score.cpu()) / rot_score_norm) ** 2).mean(dim=mean_dims)
+    else:
+        rot_loss = ((math.pi * (-torch.cos(rot_pred.cpu() - rot_score.cpu()) + 1) / rot_score_norm) ** 2).mean(dim=mean_dims)
     rot_base_loss = ((rot_score.cpu() / rot_score_norm) ** 2).mean(dim=mean_dims).detach()
 
     # torsion component
@@ -56,7 +59,10 @@ def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_si
         edge_tor_sigma = torch.from_numpy(np.concatenate(data.tor_sigma_edge))
         tor_score = data.tor_score
         tor_score_norm2 = torch.tensor(torus.score_norm(edge_tor_sigma.cpu().numpy())).float()
-        tor_loss = ((tor_pred.cpu() - tor_score.cpu()) ** 2 / tor_score_norm2)
+        if not cos_loss:
+            tor_loss = ((tor_pred.cpu() - tor_score.cpu()) ** 2 / tor_score_norm2)
+        else:
+            tor_loss = ((math.pi * (-torch.cos(tor_pred.cpu() - tor_score.cpu()) + 1)) ** 2 / tor_score_norm2)
         if weighted_tor and weighted_tor != 5 and weighted_tor != 7:
             if weighted_tor != 6:
                 torsion_weights = data['ligand'].heuristic_torsion_weights.cpu()
@@ -69,7 +75,7 @@ def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_si
             bias1 = data['ligand'].nn_torsion_model[1]
             weight2 = data['ligand'].nn_torsion_model[2]
             bias2 = data['ligand'].nn_torsion_model[3]
-            tor_loss = sigmoid(linear(leaky_relu(linear(in_vec, weight1, bias1), negative_slope=0.1), weight2, bias2)).cpu() * 2
+            tor_loss = sigmoid(linear(leaky_relu(linear(in_vec, weight1, bias1), negative_slope=0.1), weight2, bias2)).cpu() / tor_score_norm2 / 50.0
 
         tor_base_loss = ((tor_score.cpu() ** 2 / tor_score_norm2)).detach()
         if apply_mean or weighted_tor == 7:
@@ -298,7 +304,7 @@ class AverageMeter():
             return out
 
 
-def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weights, weighted_tor=False):
+def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weights, weighted_tor=False, cos_loss=False):
     model.train()
     meter = AverageMeter(['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
                           'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'])
@@ -328,7 +334,7 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
 
         try:
             tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
-            loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, device=device, weighted_tor=weighted_tor)
+            loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, device=device, weighted_tor=weighted_tor, cos_loss=cos_loss)
             loss = loss_tuple[0]
 
             if torch.any(torch.isnan(loss)):
@@ -378,7 +384,7 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
     return out
 
 
-def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=False, weighted_tor=False):
+def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=False, weighted_tor=False, cos_loss=False):
     model.eval()
     meter = AverageMeter(['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
                           'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss',
@@ -409,7 +415,7 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
                 data = data.to(device)
             with torch.no_grad():
                 tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
-            loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, apply_mean=False, device=device, weighted_tor=weighted_tor)
+            loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, apply_mean=False, device=device, weighted_tor=weighted_tor, cos_loss=cos_loss)
             if loss_tuple is None or torch.any(torch.isnan(loss_tuple[0])):
                 has_error = True
                 loss_tuple[0].zero_()
@@ -460,6 +466,7 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
     tr_schedule, rot_schedule, tor_schedule = t_schedule, t_schedule, t_schedule
     rmsds, min_rmsds = [], []
     centroids, min_centroids = [], []
+    perturbs = {}
 
     for idx, orig_complex_graph in enumerate(loader):
         print('Inference idx ' + str(idx), flush=True)
@@ -481,9 +488,11 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
                                                          tor_schedule=tor_schedule,
                                                          device=device, t_to_sigma=t_to_sigma, model_args=args,
                                                          t_schedule=t_schedule,
+                                                         no_kabsch=args.no_kabsch,
                                                          temp_sampling=[args.temp_sampling_tr, args.temp_sampling_rot, args.temp_sampling_tor] if args.inf_temp else 1.0,
                                                          temp_psi=[args.temp_psi_tr, args.temp_psi_rot, args.temp_psi_tor] if args.inf_temp else 0.0 ,
-                                                         temp_sigma_data=[args.temp_sigma_data_tr, args.temp_sigma_data_rot, args.temp_sigma_data_tor] if args.inf_temp else 0.5)
+                                                         temp_sigma_data=[args.temp_sigma_data_tr, args.temp_sigma_data_rot, args.temp_sigma_data_tor] if args.inf_temp else 0.5,
+                                                         perturbs=perturbs)
             except Exception as e:
                 failed_convergence_counter += 1
                 if failed_convergence_counter > 5:
@@ -552,4 +561,4 @@ def inference_epoch_fix(model, loader, device, t_to_sigma, args):
               'min_centroid_lt2': (100 * (min_centroids < 2).sum() / len(min_centroids)),
               'min_centroid_lt5': (100 * (min_centroids < 5).sum() / len(min_centroids)),
               }
-    return losses
+    return losses, perturbs

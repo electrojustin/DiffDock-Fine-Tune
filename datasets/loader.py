@@ -50,7 +50,8 @@ def construct_loader(args, t_to_sigma, device):
     transform = NoiseTransform(t_to_sigma=t_to_sigma, no_torsion=args.no_torsion,
                                all_atom=args.all_atoms, alpha=args.sampling_alpha, beta=args.sampling_beta,
                                include_miscellaneous_atoms=False if not hasattr(args, 'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
-                               crop_beyond_cutoff=args.crop_beyond, no_kabsch=args.no_kabsch)
+                               crop_beyond_cutoff=args.crop_beyond, no_kabsch=args.no_kabsch,
+                               rng_gamma=args.rng_gamma, rng_tr_eps=args.rng_tr_eps, rng_tor_eps=args.rng_tor_eps, rng_rot_eps=args.rng_rot_eps)
     if args.triple_training: assert args.combined_training
 
     sequences_to_embeddings = None
@@ -100,6 +101,7 @@ def construct_loader(args, t_to_sigma, device):
             train_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', cache_path=args.cache_path, split_path=args.split_train, keep_original=True,
                                     num_conformers=args.num_conformers, root=args.pdbbind_dir,
                                     esm_embeddings_path=args.pdbbind_esm_embeddings_path,
+                                    smile_file=args.smile_file,
                                     protein_file=args.protein_file, require_ligand=True, max_receptor_size=args.max_receptor_size, **common_args)
 
         if args.dataset == 'moad' or args.combined_training:
@@ -121,6 +123,7 @@ def construct_loader(args, t_to_sigma, device):
         if args.dataset == 'pdbbind' or args.double_val:
             val_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', cache_path=args.cache_path, split_path=args.split_val, keep_original=True,
                                   esm_embeddings_path=args.pdbbind_esm_embeddings_path, root=args.pdbbind_dir,
+                                  smile_file=args.smile_file,
                                   protein_file=args.protein_file, require_ligand=True, max_receptor_size=args.max_receptor_size, **common_args)
             if args.double_val:
                 val_dataset2 = val_dataset

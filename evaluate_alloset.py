@@ -46,7 +46,7 @@ def get_dataset(args, model_args, confidence=False):
     dataset = LazyPDBBindSet(transform=None, root=args.data_dir, limit_complexes=args.limit_complexes, dataset=args.dataset,
                     chain_cutoff=args.chain_cutoff,
                     receptor_radius=model_args.receptor_radius,
-                    cache_path=model_args.cache_path, split_path=args.split_path,
+                    cache_path=args.cache_path, split_path=args.split_path,
                     remove_hs=model_args.remove_hs, max_lig_size=None,
                     c_alpha_max_neighbors=model_args.c_alpha_max_neighbors,
                     matching=not model_args.no_torsion, keep_original=True,
@@ -102,7 +102,7 @@ if __name__ == '__main__':
     parser.add_argument('--cache_path', type=str, default='data/cache', help='Folder from where to load/restore cached dataset')
     parser.add_argument('--data_dir', type=str, default='../../ligbind/data/BindingMOAD_2020_ab_processed_biounit/', help='Folder containing original structures')
     parser.add_argument('--split_path', type=str, default='data/BindingMOAD_2020_ab_processed/splits/val.txt', help='Path of file defining the split')
-    parser.add_argument('--confidence_cache_path', type=str, default='data/cache', help='Folder from where to load/restore cached dataset')
+#    parser.add_argument('--confidence_cache_path', type=str, default='data/cache', help='Folder from where to load/restore cached dataset')
 
     parser.add_argument('--no_model', action='store_true', default=False, help='Whether to return seed conformer without running model')
     parser.add_argument('--no_random', action='store_true', default=False, help='Whether to add randomness in diffusion steps')
@@ -231,8 +231,8 @@ if __name__ == '__main__':
             score_model_args.not_fixed_center_conv = False
         if not hasattr(score_model_args, 'DDP'):
             score_model_args.DDP = False
-        if hasattr(args, 'cache_path'):
-            score_model_args.cache_path = args.cache_path
+#        if hasattr(args, 'cache_path'):
+#            score_model_args.cache_path = args.cache_path
     if args.confidence_model_dir is not None:
         with open(f'{args.confidence_model_dir}/model_parameters.yml') as f:
             confidence_args = Namespace(**yaml.full_load(f))
@@ -248,8 +248,8 @@ if __name__ == '__main__':
             confidence_args.num_classification_bins = 2
         if not hasattr(confidence_args, 'DDP'):
             confidence_args.DDP = False
-        if hasattr(args, 'confidence_cache_path'):
-            confidence_args.cache_path = args.confidence_cache_path
+#        if hasattr(args, 'confidence_cache_path'):
+#            confidence_args.cache_path = args.confidence_cache_path
 
     if args.num_cpu is not None:
         torch.set_num_threads(args.num_cpu)
@@ -269,6 +269,7 @@ if __name__ == '__main__':
     if not args.no_model:
         model = get_model(score_model_args, device, t_to_sigma=t_to_sigma, no_parallel=True, old=args.old_score_model)
 #        args.ckpt = 'last_model.pt'
+        args.ckpt = 'running_best_inference_epoch_model.pt'
         state_dict = torch.load(f'{args.model_dir}/{args.ckpt}', map_location=torch.device('cpu'))
         fixed_state_dict = {}
         for key in state_dict.keys():
@@ -285,6 +286,15 @@ if __name__ == '__main__':
             ema_weights = ExponentialMovingAverage(model.parameters(), decay=score_model_args.ema_rate)
             ema_weights.load_state_dict(ema_weights_state, device=device)
             ema_weights.copy_to(model.parameters())
+        elif 'model' in state_dict:
+            model_state_dict = state_dict['model']
+            fixed_state_dict = {}
+            for key in model_state_dict.keys():
+                fixed_state_dict[key.replace('module.', '')] = model_state_dict[key]
+            model_state_dict = fixed_state_dict
+            model.load_state_dict(model_state_dict, strict=True)
+            model = model.to(device)
+            model.eval()
         else:
             model.load_state_dict(state_dict, strict=True)
             model = model.to(device)
@@ -451,6 +461,7 @@ if __name__ == '__main__':
                 if score_model_args.no_torsion:
                     orig_complex_graph['ligand'].orig_pos = (orig_complex_graph['ligand'].pos.cpu().numpy() + orig_complex_graph.original_center.cpu().numpy())
 
+                print(data_list[0]['ligand'].x)
                 filterHs = torch.not_equal(data_list[0]['ligand'].x[:, 0], 0).cpu().numpy()
 
                 if isinstance(orig_complex_graph['ligand'].orig_pos, list):
