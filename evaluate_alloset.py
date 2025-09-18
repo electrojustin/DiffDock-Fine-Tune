@@ -267,7 +267,7 @@ if __name__ == '__main__':
 
     if not args.no_model:
         model = get_model(score_model_args, device, t_to_sigma=t_to_sigma, no_parallel=True, old=args.old_score_model)
-        #args.ckpt = 'last_model.pt'
+        args.ckpt = 'last_model.pt'
         state_dict = torch.load(f'{args.model_dir}/{args.ckpt}', map_location=torch.device('cpu'))
         fixed_state_dict = {}
         for key in state_dict.keys():

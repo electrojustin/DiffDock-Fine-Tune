@@ -112,8 +112,6 @@ def parse_train_args():
     parser.add_argument('--crop_beyond', type=float, default=20, help='')
 
     # Diffusion
-    parser.add_argument('--no_kabsch', action='store_true', default=False, help='')
-    parser.add_argument('--weighted_tor', type=int, default=0, help='')
     parser.add_argument('--tr_weight', type=float, default=0.33, help='Weight of translation loss')
     parser.add_argument('--rot_weight', type=float, default=0.33, help='Weight of rotation loss')
     parser.add_argument('--tor_weight', type=float, default=0.33, help='Weight of torsional loss')

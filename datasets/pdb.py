@@ -141,10 +141,9 @@ def compute_cg_features(aa, aa_smile):
         subgraph(atoms_to_keep, complex_graph['ligand', 'ligand'].edge_index, complex_graph['ligand', 'ligand'].edge_attr, relabel_nodes=True)
     complex_graph['ligand'].x = complex_graph['ligand'].x[atoms_to_keep]
 
-    edge_mask, mask_rotate, weight = get_transformation_mask(complex_graph)
+    edge_mask, mask_rotate = get_transformation_mask(complex_graph)
     complex_graph['ligand'].edge_mask = torch.tensor(edge_mask)
     complex_graph['ligand'].mask_rotate = mask_rotate
-    complex_graph['ligand'].torsion_weight = weight
     return complex_graph
 
 
@@ -354,10 +353,9 @@ class PDBSidechain(Dataset):
             lig_graph = HeteroData()
             get_lig_graph(mol, lig_graph)
 
-            edge_mask, mask_rotate, weight = get_transformation_mask(lig_graph)
+            edge_mask, mask_rotate = get_transformation_mask(lig_graph)
             lig_graph['ligand'].edge_mask = torch.tensor(edge_mask)
             lig_graph['ligand'].mask_rotate = mask_rotate
-            lig_graph['ligand'].torsion_weights = weight
             lig_graph['ligand'].smiles = smiles
             lig_graph['ligand'].pos = lig_graph['ligand'].pos - torch.mean(lig_graph['ligand'].pos, dim=0, keepdim=True)
 

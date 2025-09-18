@@ -25,7 +25,7 @@ from utils import so3, torus
 class NoiseTransform(BaseTransform):
     def __init__(self, t_to_sigma, no_torsion, all_atom, alpha=1, beta=1,
                  include_miscellaneous_atoms=False, crop_beyond_cutoff=None, time_independent=False, rmsd_cutoff=0,
-                 minimum_t=0, sampling_mixing_coeff=0, no_kabsch=False):
+                 minimum_t=0, sampling_mixing_coeff=0):
         self.t_to_sigma = t_to_sigma
         self.no_torsion = no_torsion
         self.all_atom = all_atom
@@ -37,7 +37,6 @@ class NoiseTransform(BaseTransform):
         self.crop_beyond_cutoff = crop_beyond_cutoff
         self.rmsd_cutoff = rmsd_cutoff
         self.time_independent = time_independent
-        self.no_kabsch=False
 
     def __call__(self, data):
         if data is None:
@@ -84,7 +83,7 @@ class NoiseTransform(BaseTransform):
         torsion_updates = np.random.normal(loc=0.0, scale=tor_sigma, size=data['ligand'].edge_mask.sum()) if torsion_updates is None else torsion_updates
         torsion_updates = None if self.no_torsion else torsion_updates
         try:
-            modify_conformer(data, tr_update, torch.from_numpy(rot_update).float(), torsion_updates, no_kabsch=self.no_kabsch)
+            modify_conformer(data, tr_update, torch.from_numpy(rot_update).float(), torsion_updates)
         except Exception as e:
             print("failed modify conformer")
             print(e)

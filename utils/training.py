@@ -5,7 +5,6 @@ from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 import torch
 import traceback
-import math
 
 from confidence.dataset import ListDataset
 from utils import so3, torus
@@ -15,21 +14,12 @@ from utils.diffusion_utils import get_t_schedule
 
 
 def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_sigma, device, tr_weight=1, rot_weight=1,
-                  tor_weight=1, backbone_weight=0, sidechain_weight=0, apply_mean=True, no_torsion=False, weighted_tor=False):
+                  tor_weight=1, backbone_weight=0, sidechain_weight=0, apply_mean=True, no_torsion=False):
     ## the original DiffDock uses DataParallel and DataListLoader to pass in data in the form of a list
     ## thus this code is written in the anticipation that the data will be a list
     ## this loss_function should be rewritten to handle a HeteroDataBatch from DataLoader
     tr_sigma, rot_sigma, tor_sigma = t_to_sigma(*[data.complex_t[noise_type] for noise_type in ['tr', 'rot', 'tor']])
     mean_dims = (0, 1) if apply_mean else 1
-
-    if weighted_tor:
-        # Average ligand size is 30 heavy atoms. sqrt(30) ~= 5.5
-        if weighted_tor == 1:
-            heavy_atom_factor = math.sqrt(float(data['ligand'].pos.shape[0])) / 5.5
-        elif weighted_tor == 2:
-            heavy_atom_factor = float(data['ligand'].pos.shape[0]) / 30.0
-        rot_weight *= heavy_atom_factor
-        tor_weight *= heavy_atom_factor
 
     # translation component
     tr_score = data.tr_score # torch.cat([d.tr_score for d in data], dim=0) if device.type == 'cuda' else data.tr_score
@@ -49,11 +39,6 @@ def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_si
         tor_score = data.tor_score
         tor_score_norm2 = torch.tensor(torus.score_norm(edge_tor_sigma.cpu().numpy())).float()
         tor_loss = ((tor_pred.cpu() - tor_score.cpu()) ** 2 / tor_score_norm2)
-        if weighted_tor:
-            torsion_weights = data['ligand'].torsion_weights.cpu()
-            torsion_weights *= len(torsion_weights)
-            tor_loss *= torsion_weights
-
         tor_base_loss = ((tor_score.cpu() ** 2 / tor_score_norm2)).detach()
         if apply_mean:
             tor_loss, tor_base_loss = tor_loss.mean() * torch.ones(1, dtype=torch.float), tor_base_loss.mean() * torch.ones(1, dtype=torch.float)
@@ -268,7 +253,7 @@ class AverageMeter():
 
     def summary(self):
         if self.intervals == 1:
-            out = {k: v.item() / self.count if self.count else 2.0 for k, v in self.acc.items()}
+            out = {k: v.item() / self.count for k, v in self.acc.items()}
             return out
         else:
             out = {}
@@ -279,7 +264,7 @@ class AverageMeter():
             return out
 
 
-def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weights, weighted_tor=False):
+def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weights):
     model.train()
     meter = AverageMeter(['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
                           'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'])
@@ -309,7 +294,7 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
 
         try:
             tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
-            loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, device=device, weighted_tor=weighted_tor)
+            loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, device=device)
             loss = loss_tuple[0]
 
             if torch.any(torch.isnan(loss)):
@@ -359,7 +344,7 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
     return out
 
 
-def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=False, weighted_tor=False):
+def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=False):
     model.eval()
     meter = AverageMeter(['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
                           'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss',
@@ -390,7 +375,7 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
                 data = data.to(device)
             with torch.no_grad():
                 tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
-            loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, apply_mean=False, device=device, weighted_tor=weighted_tor)
+            loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, apply_mean=False, device=device)
             if loss_tuple is None or torch.any(torch.isnan(loss_tuple[0])):
                 has_error = True
                 loss_tuple[0].zero_()

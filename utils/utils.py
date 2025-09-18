@@ -153,9 +153,7 @@ def get_optimizer_and_scheduler(args, model, scheduler_mode='min', step=0, optim
     if step == 0 or args.scheduler == 'layer_linear_warmup':
         optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=args.w_decay)
 
-    #scheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode=scheduler_mode, factor=0.7, patience=args.scheduler_patience, min_lr=args.lr / 100)
-    scheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode=scheduler_mode, factor=0.2, patience=args.scheduler_patience, min_lr=args.lr / 100)
-
+    scheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode=scheduler_mode, factor=0.7, patience=args.scheduler_patience, min_lr=args.lr / 100)
     if args.scheduler == 'plateau':
         scheduler = scheduler_plateau
     elif args.scheduler == 'linear_warmup' or args.scheduler == 'layer_linear_warmup':
