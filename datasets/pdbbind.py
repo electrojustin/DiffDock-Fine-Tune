@@ -206,16 +206,6 @@ class PDBBind(Dataset):
 
         return complex_graph
 
-    def get_all_complexes(self):
-        ret = {}
-        for idx in range(0, self.len()):
-            try:
-                complex_graph = self.get(idx)
-                ret[complex_graph.name] = complex_graph
-            except:
-                print('Missing complex at idx ' + str(idx))
-        return ret
-
     def preprocessing(self):
         print(f'Processing complexes from [{self.split_path}] and saving it to [{self.full_cache_path}]')
 
@@ -386,8 +376,7 @@ class PDBBind(Dataset):
             get_lig_graph_with_matching(lig, complex_graph, self.popsize, self.maxiter, self.matching, self.keep_original,
                                         self.num_conformers, remove_hs=self.remove_hs, tries=self.matching_tries)
 
-            short_name = name.split('_')[0]
-            moad_extract_receptor_structure(path=os.path.join(self.pdbbind_dir, name, f'{short_name}_{self.protein_file}.pdb'),
+            moad_extract_receptor_structure(path=os.path.join(self.pdbbind_dir, name, f'{name}_{self.protein_file}.pdb'),
                                             complex_graph=complex_graph,
                                             neighbor_cutoff=self.receptor_radius,
                                             max_neighbors=self.c_alpha_max_neighbors,
@@ -466,8 +455,7 @@ def print_statistics(complex_graphs):
 
 
 def read_mol(pdbbind_dir, name, suffix='ligand', remove_hs=False):
-    short_name = name.split('_')[0]
-    lig = read_molecule(os.path.join(pdbbind_dir, name, f'{short_name}_{suffix}.sdf'), remove_hs=remove_hs, sanitize=True)
+    lig = read_molecule(os.path.join(pdbbind_dir, name, f'{name}_{suffix}.sdf'), remove_hs=remove_hs, sanitize=True)
     if lig is None:  # read mol2 file if sdf file cannot be sanitized
         lig = read_molecule(os.path.join(pdbbind_dir, name, f'{name}_{suffix}.mol2'), remove_hs=remove_hs, sanitize=True)
     return lig

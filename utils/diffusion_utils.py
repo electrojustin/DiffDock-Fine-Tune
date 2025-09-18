@@ -143,10 +143,6 @@ def get_t_schedule(sigma_schedule, inference_steps, inf_sched_alpha=1, inf_sched
     raise Exception()
 
 
-def get_inverse_schedule(t, sched_alpha=1, sched_beta=1):
-    return beta.ppf(t, a=sched_alpha, b=sched_beta)
-
-
 def set_time(complex_graphs, t, t_tr, t_rot, t_tor, batchsize, all_atoms, device, include_miscellaneous_atoms=False):
     complex_graphs['ligand'].node_t = {
         'tr': t_tr * torch.ones(complex_graphs['ligand'].num_nodes).to(device),

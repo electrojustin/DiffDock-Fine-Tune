@@ -5,8 +5,8 @@
 #SBATCH --time=24:00:00
 #SBATCH --mail-type=BEGIN,END
 #SBATCH --mail-user=jeg10045@nyu.edu
-#SBATCH --mem=60G
-#SBATCH --gres=gpu:4
+#SBATCH --mem=120G
+#SBATCH --gres=gpu:2
 #SBATCH --job-name=train-diffdock
 
 module purge

@@ -267,12 +267,7 @@ if __name__ == '__main__':
 
     if not args.no_model:
         model = get_model(score_model_args, device, t_to_sigma=t_to_sigma, no_parallel=True, old=args.old_score_model)
-        args.ckpt = 'last_model.pt'
         state_dict = torch.load(f'{args.model_dir}/{args.ckpt}', map_location=torch.device('cpu'))
-        fixed_state_dict = {}
-        for key in state_dict.keys():
-            fixed_state_dict[key.replace('module.', '')] = state_dict[key]
-        state_dict = fixed_state_dict
         if args.ckpt == 'last_model.pt':
             model_state_dict = state_dict['model']
             ema_weights_state = state_dict['ema_weights']
@@ -401,8 +396,6 @@ if __name__ == '__main__':
                                    args.pocket_knowledge, args.pocket_cutoff,
                                    initial_noise_std_proportion=args.initial_noise_std_proportion,
                                    choose_residue=args.choose_residue)
-                # print(torch.mean(data_list[0]['ligand'].pos, dim=0, keepdim=True))
-                # print(torch.mean(data_list[0]['receptor'].pos, dim=0, keepdim=True))
 
                 pdb = None
                 if args.save_visualisation:
