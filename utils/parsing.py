@@ -80,7 +80,6 @@ def parse_train_args():
     parser.add_argument('--no_parallel', action='store_true', default=False, help='train on one GPU')
 
     # Dataset
-    parser.add_argument('--smile_file', type=str, default=None, help='')
     parser.add_argument('--limit_complexes', type=int, default=0, help='If positive, the number of training and validation complexes is capped') # TODO change
     parser.add_argument('--all_atoms', action='store_true', default=False, help='Whether to use the all atoms model')
     parser.add_argument('--chain_cutoff', type=float, default=10.0, help='Cutoff on whether to include non-interacting chains')
@@ -114,11 +113,6 @@ def parse_train_args():
 
     # Diffusion
     parser.add_argument('--no_kabsch', action='store_true', default=False, help='')
-    parser.add_argument('--rng_gamma', type=float, default=0.0, help='')
-    parser.add_argument('--rng_tr_eps', type=float, default=4.0, help='')
-    parser.add_argument('--rng_tor_eps', type=float, default=4.0, help='')
-    parser.add_argument('--rng_rot_eps', type=float, default=4.0, help='')
-    parser.add_argument('--cos_loss', action='store_true', default=False, help='')
     parser.add_argument('--weighted_tor', type=int, default=0, help='')
     parser.add_argument('--tr_weight', type=float, default=0.33, help='Weight of translation loss')
     parser.add_argument('--rot_weight', type=float, default=0.33, help='Weight of rotation loss')

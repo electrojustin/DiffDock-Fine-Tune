@@ -1,6 +1,5 @@
 import copy
 import random
-import math
 
 import numpy as np
 import torch
@@ -12,7 +11,7 @@ from utils.torsion import modify_conformer_torsion_angles
 from scipy.spatial.transform import Rotation as R
 from utils.utils import crop_beyond
 from utils.logging_utils import get_logger
-from utils.geometry import axis_angle_to_matrix, rigid_transform_Kabsch_3D_torch
+from utils.geometry import rigid_transform_Kabsch_3D_torch
 
 
 def randomize_position(data_list, no_torsion, no_random, tr_sigma_max, pocket_knowledge=False, pocket_cutoff=7,
@@ -34,7 +33,6 @@ def randomize_position(data_list, no_torsion, no_random, tr_sigma_max, pocket_kn
         # randomize torsion angles
         for complex_graph in data_list:
             torsion_updates = np.random.uniform(low=-np.pi, high=np.pi, size=complex_graph['ligand'].edge_mask.sum())
-            complex_graph['ligand'].tor_updates = torch.from_numpy(torsion_updates)
             complex_graph['ligand'].pos = \
                 modify_conformer_torsion_angles(complex_graph['ligand'].pos,
                                                 complex_graph['ligand', 'ligand'].edge_index.T[
@@ -44,9 +42,7 @@ def randomize_position(data_list, no_torsion, no_random, tr_sigma_max, pocket_kn
     for complex_graph in data_list:
         # randomize position
         molecule_center = torch.mean(complex_graph['ligand'].pos, dim=0, keepdim=True)
-        random_rotation = R.random()
-        complex_graph['ligand'].rot_updates = torch.from_numpy(random_rotation.as_rotvec()).float().reshape((-1, 3))
-        random_rotation = torch.from_numpy(random_rotation.as_matrix()).float()
+        random_rotation = torch.from_numpy(R.random().as_matrix()).float()
         complex_graph['ligand'].pos = (complex_graph['ligand'].pos - molecule_center) @ random_rotation.T + center_pocket
         # base_rmsd = np.sqrt(np.sum((complex_graph['ligand'].pos.cpu().numpy() - orig_complex_graph['ligand'].pos.numpy()) ** 2, axis=1).mean())
 
@@ -61,7 +57,6 @@ def randomize_position(data_list, no_torsion, no_random, tr_sigma_max, pocket_kn
                 # if initial_noise_std_proportion < 0.0, we use the tr_sigma_max multiplied by -initial_noise_std_proportion
                 tr_update = torch.normal(mean=0, std=-initial_noise_std_proportion * tr_sigma_max, size=(1, 3))
             complex_graph['ligand'].pos += tr_update
-        complex_graph['ligand'].tr_updates = tr_update.cpu()
 
 
 def is_iterable(arr):
@@ -75,7 +70,7 @@ def is_iterable(arr):
 def sampling(data_list, model, inference_steps, tr_schedule, rot_schedule, tor_schedule, device, t_to_sigma, model_args,
              no_random=False, ode=False, visualization_list=None, confidence_model=None, confidence_data_list=None, confidence_model_args=None,
              t_schedule=None, batch_size=32, no_final_step_noise=False, pivot=None, return_full_trajectory=False,
-             temp_sampling=1.0, temp_psi=0.0, temp_sigma_data=0.5, return_features=False, no_kabsch=False, perturbs=None):
+             temp_sampling=1.0, temp_psi=0.0, temp_sigma_data=0.5, return_features=False, no_kabsch=False):
     N = len(data_list)
     trajectory = []
     logger = get_logger()
@@ -191,15 +186,6 @@ def sampling(data_list, model, inference_steps, tr_schedule, rot_schedule, tor_s
                     lambda_tor = (tor_sigma_data + tor_sigma) / (tor_sigma_data + tor_sigma / temp_sampling[2])
                     tor_perturb = (tor_g ** 2 * dt_tor * (lambda_tor + temp_sampling[2] * temp_psi[2] / 2) * tor_score + tor_g * np.sqrt(dt_tor * (1 + temp_psi[2])) * tor_z)
 
-                if perturbs is not None and t_idx+1 < len(tr_schedule):
-                    if (t_idx+1) not in perturbs:
-                       perturbs[t_idx+1] = [[], [], [], [tr_schedule[t_idx+1], rot_schedule[t_idx+1], tor_schedule[t_idx+1]]]
-                    complex_graph_batch['ligand'].tr_updates += tr_perturb
-                    complex_graph_batch['ligand'].rot_updates += rot_perturb
-                    complex_graph_batch['ligand'].tor_updates += tor_perturb
-                    perturbs[t_idx+1][0] += list(filter(lambda x: abs(x) < 35.0, torch.nan_to_num(complex_graph_batch['ligand'].tr_updates.flatten(), nan=40.0).cpu().tolist()))
-                    perturbs[t_idx+1][1] += torch.nan_to_num(complex_graph_batch['ligand'].rot_updates.flatten(), nan=3 * math.pi).fmod(2 * math.pi).cpu().tolist()
-                    perturbs[t_idx+1][2] += torch.nan_to_num(complex_graph_batch['ligand'].tor_updates.flatten(), nan=3 * math.pi).fmod(2 * math.pi).cpu().tolist()
                 # Apply noise
                 complex_graph_batch['ligand'].pos = \
                     modify_conformer_batch(complex_graph_batch['ligand'].pos, complex_graph_batch, tr_perturb, rot_perturb,

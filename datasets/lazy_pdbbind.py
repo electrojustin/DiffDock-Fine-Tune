@@ -23,7 +23,6 @@ from rdkit.Chem import RemoveAllHs
 from datasets.process_mols import read_molecule, get_lig_graph_with_matching, generate_conformer, moad_extract_receptor_structure
 from utils.diffusion_utils import modify_conformer, set_time
 from utils.utils import read_strings_from_txt, crop_beyond
-from utils.geometry import rigid_transform_Kabsch_3D_torch
 from utils import so3, torus
 
 
@@ -150,13 +149,7 @@ class LazyPDBBindSet(Dataset):
             with open(self.smile_file, 'r') as smile_file:
                 for row in smile_file.readlines():
                     parsed_row = row.split('\t')
-                    if len(parsed_row) == 3:
-                        self.ligand_smiles[(parsed_row[0].upper(), parsed_row[1].upper())] = parsed_row[2].strip()
-                    elif len(parsed_row) == 2:
-                        self.ligand_smiles[(parsed_row[0].upper(), '')] = parsed_row[1].strip()
-                    else:
-                        print('Error parsing smile file!')
-                        break
+                    self.ligand_smiles[(parsed_row[0].upper(), parsed_row[1].upper())] = parsed_row[2].strip()
 
         print(self.split_path)
         self.complex_names_all = read_strings_from_txt(self.split_path)
@@ -206,7 +199,7 @@ class LazyPDBBindSet(Dataset):
             if len(parsed_name) >= 3:
                 lig_name = parsed_name[2]
             else:
-                lig_name = ''
+                lig_name = None
             orig_lig_pos = None
             if lig_name and self.ligand_smiles and (pdb.upper(), lig_name.upper()) in self.ligand_smiles:
                 lig_smiles = self.ligand_smiles[(pdb.upper(), lig_name.upper())]
@@ -254,8 +247,6 @@ class LazyPDBBindSet(Dataset):
                                             atom_max_neighbors=self.atom_max_neighbors)
             if orig_lig_pos is not None:
                 complex_graph['ligand'].orig_pos = orig_lig_pos
-                rot, tr = rigid_transform_Kabsch_3D_torch(complex_graph['ligand'].pos.T, torch.tensor(complex_graph['ligand'].orig_pos, dtype=torch.float32).T)
-                complex_graph['ligand'].pos = complex_graph['ligand'].pos @ rot.T + tr.T
 
         except Exception as e:
             print(f'Skipping {name} because of the error:')

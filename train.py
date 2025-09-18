@@ -12,7 +12,6 @@ import torch
 import torch.distributed as dist
 import pstats
 import io
-import pickle
 from torch.nn import DataParallel
 from torch.nn.parallel import DistributedDataParallel
 from numpy import mean
@@ -75,21 +74,19 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
     logs = {}
     epoch=list(epoch_iter)[0]-1
     if args.train_inference_freq != None:
-        inf_metrics, perturbs = inference_epoch_fix(model, train_loader, args.device, t_to_sigma, args)
-        with open(f'perturbs_{gethostname()}_{args.local_rank}.pkl', 'wb') as pertub_file:
-           pickle.dump(perturbs, pertub_file)
+        inf_metrics = inference_epoch_fix(model, train_loader, args.device, t_to_sigma, args)
         print("Epoch {}: Train inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
                 .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
         logs.update({'traininf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
     if args.val_inference_freq != None:
-        inf_metrics, _ = inference_epoch_fix(model, val_loader, args.device, t_to_sigma, args)
+        inf_metrics = inference_epoch_fix(model, val_loader, args.device, t_to_sigma, args)
         print("Epoch {}: Val inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
                 .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
         logs.update({'valinf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
     if args.pdbbind_inference_freq != None:
-        inf_metrics, _ = inference_epoch_fix(model, pdbbind_loader, args.device, t_to_sigma, args)
+        inf_metrics = inference_epoch_fix(model, pdbbind_loader, args.device, t_to_sigma, args)
         print("Epoch {}: PDBBind inference rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f}"
                 .format(epoch, inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5']))
         logs.update({'pdbbindinf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
@@ -120,7 +117,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                                                                optimizer=optimizer)
 
         logs = {}
-        train_losses = train_epoch(model, train_loader, optimizer, args.device, t_to_sigma, loss_fn, ema_weights if epoch > freeze_params else None, weighted_tor=args.weighted_tor, cos_loss=args.cos_loss)
+        train_losses = train_epoch(model, train_loader, optimizer, args.device, t_to_sigma, loss_fn, ema_weights if epoch > freeze_params else None, weighted_tor=args.weighted_tor)
         # number of tdqm batches = len(train_dataset) / (args.batch_size)
         
         print("Epoch {}: Training loss {:.4f}  tr {:.4f}   rot {:.4f}   tor {:.4f}   sc {:.4f}  lr {:.4f}"
@@ -130,28 +127,24 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
         if epoch > freeze_params:
             ema_weights.store(model.parameters())
             if args.use_ema: ema_weights.copy_to(model.parameters()) # load ema parameters into model for running validation and inference
-        val_losses = test_epoch(model, val_loader, args.device, t_to_sigma, loss_fn, args.test_sigma_intervals, args.weighted_tor, cos_loss=args.cos_loss)
+        val_losses = test_epoch(model, val_loader, args.device, t_to_sigma, loss_fn, args.test_sigma_intervals, args.weighted_tor)
         print("Epoch {}: Validation loss {:.4f}  tr {:.4f}   rot {:.4f}   tor {:.4f}   sc {:.4f}"
               .format(epoch, val_losses['loss'], val_losses['tr_loss'], val_losses['rot_loss'], val_losses['tor_loss'], val_losses['sidechain_loss']))
 
         if args.train_inference_freq != None and (epoch + 1) % args.train_inference_freq == 0:
-            inf_metrics, perturbs = inference_epoch_fix(model, train_loader, args.device, t_to_sigma, args)
-            if args.local_rank == 0:
-                with open(f'perturbs_{gethostname()}_{args.local_rank}.pkl', 'wb') as pertub_file:
-                    pickle.dump(perturbs, pertub_file)
-
+            inf_metrics = inference_epoch_fix(model, train_loader, args.device, t_to_sigma, args)
             print("Epoch {}: Train inference rmsd_median {:.3f} rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f} centroid_median {:.3f} centroid_lt2 {:.3f} centroid_lt5 {:.3f} min_centroid_lt2 {:.3f} min_centroid_lt5 {:.3f}"
                   .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
             logs.update({'traininf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
         if args.val_inference_freq != None and (epoch + 1) % args.val_inference_freq == 0:
-            inf_metrics, _ = inference_epoch_fix(model, val_loader, args.device, t_to_sigma, args)
+            inf_metrics = inference_epoch_fix(model, val_loader, args.device, t_to_sigma, args)
             print("Epoch {}: Val inference rmsd_median {:.3f} rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f} centroid_median {:.3f} centroid_lt2 {:.3f} centroid_lt5 {:.3f} min_centroid_lt2 {:.3f} min_centroid_lt5 {:.3f}"
                   .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
             logs.update({'valinf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
         if args.pdbbind_inference_freq != None and (epoch + 1) % args.pdbbind_inference_freq == 0:
-            inf_metrics, _ = inference_epoch_fix(model, pdbbind_loader, args.device, t_to_sigma, args)
+            inf_metrics = inference_epoch_fix(model, pdbbind_loader, args.device, t_to_sigma, args)
             print("Epoch {}: PDBBind inference rmsd_median {:.3f} rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f} centroid_median {:.3f} centroid_lt2 {:.3f} centroid_lt5 {:.3f} min_centroid_lt2 {:.3f} min_centroid_lt5 {:.3f}"
                   .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
             logs.update({'pdbbindinf_' + k: v for k, v in inf_metrics.items()}, step=epoch)

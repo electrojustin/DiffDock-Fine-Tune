@@ -45,9 +45,9 @@ def create_tor_model(complex_graph, trials=1000):
     rmsds = np.array(rmsds)
 
     tor_model = torch.nn.Sequential(
-            torch.nn.Linear(tor_updates.shape[1], 2 * tor_updates.shape[1]),
+            torch.nn.Linear(tor_updates.shape[1], tor_updates.shape[1]),
             torch.nn.LeakyReLU(negative_slope=0.1),
-            torch.nn.Linear(2 * tor_updates.shape[1], 1),
+            torch.nn.Linear(tor_updates.shape[1], 1),
             torch.nn.Sigmoid(),
     )
     max_rmsd = max(rmsds)
@@ -55,23 +55,14 @@ def create_tor_model(complex_graph, trials=1000):
     optimizer = torch.optim.Adam(tor_model.parameters(), lr=0.01)
     tor_updates_tensor = torch.tensor(tor_updates, dtype=torch.float32)
     rmsds_tensor = torch.tensor(rmsds, dtype=torch.float32)
-    last_loss = -1
-    early_stop_counter = 0
-    for i in range(0, 10000):
+    for i in range(0, 100):
         pred = tor_model(tor_updates_tensor)[0] / 0.9 * max_rmsd
         loss = loss_fn(pred, rmsds_tensor)
-        if last_loss != -1 and loss / last_loss > 0.999:
-            early_stop_counter += 1
-        else:
-            early_stop_counter = 0
-        last_loss = loss
-        #print('iter ' + str(i) + ' mse: ' + str(loss.item()))
-        if early_stop_counter == 10:
-            break
+        if i == 99:
+            print('nn mse: ' + str(loss.item()))
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-    print('nn mse: ' + str(loss.item()))
 
     m, r, _, _ = np.linalg.lstsq(tor_updates, rmsds)
     print('linear mse: ' + str(r[0]))
@@ -490,7 +481,6 @@ def write_mol_with_coords(mol, new_coords, path):
 
 
 def read_molecule(molecule_file, sanitize=False, calc_charges=False, remove_hs=False):
-    print('Reading molecule ' + molecule_file)
     if molecule_file.endswith('.mol2'):
         mol = Chem.MolFromMol2File(molecule_file, sanitize=False, removeHs=False)
     elif molecule_file.endswith('.sdf'):

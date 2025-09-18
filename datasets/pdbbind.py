@@ -9,7 +9,6 @@ import copy
 import torch.nn.functional as F
 import numpy as np
 import torch
-from socket import gethostname
 from rdkit import Chem
 from rdkit.Chem import MolFromSmiles, AddHs
 from torch_geometric.data import Dataset, HeteroData
@@ -26,7 +25,7 @@ from utils import so3, torus
 class NoiseTransform(BaseTransform):
     def __init__(self, t_to_sigma, no_torsion, all_atom, alpha=1, beta=1,
                  include_miscellaneous_atoms=False, crop_beyond_cutoff=None, time_independent=False, rmsd_cutoff=0,
-                 minimum_t=0, sampling_mixing_coeff=0, no_kabsch=False, rng_gamma=0.0, rng_tr_eps=4.0, rng_tor_eps=4.0, rng_rot_eps=4.0):
+                 minimum_t=0, sampling_mixing_coeff=0, no_kabsch=False):
         self.t_to_sigma = t_to_sigma
         self.no_torsion = no_torsion
         self.all_atom = all_atom
@@ -38,16 +37,7 @@ class NoiseTransform(BaseTransform):
         self.crop_beyond_cutoff = crop_beyond_cutoff
         self.rmsd_cutoff = rmsd_cutoff
         self.time_independent = time_independent
-        self.no_kabsch=no_kabsch
-        self.rng_gamma = rng_gamma
-        self.rng_tr_eps = rng_tr_eps
-        self.rng_tor_eps = rng_tor_eps
-        self.rng_rot_eps = rng_rot_eps
-        self.perturbs_cache_time = None
-        self.perturbs = None
-        rank = int(os.environ["SLURM_PROCID"])
-        gpus_per_node = int(os.environ["SLURM_GPUS_ON_NODE"])
-        self.local_rank = rank - gpus_per_node * (rank // gpus_per_node)
+        self.no_kabsch=False
 
     def __call__(self, data):
         if data is None:
@@ -87,46 +77,12 @@ class NoiseTransform(BaseTransform):
         if self.time_independent:
             set_time(data, 0, 0, 0, 0, 1, self.all_atom, device=None, include_miscellaneous_atoms=self.include_miscellaneous_atoms)
         else:
-            set_time(data, t, t_tr, t_rot, t_tor, 1, self.all_atom, device=None, include_miscellaneous_atoms=self.include_miscellaneous_atoms)    
+            set_time(data, t, t_tr, t_rot, t_tor, 1, self.all_atom, device=None, include_miscellaneous_atoms=self.include_miscellaneous_atoms)
 
         tr_update = torch.normal(mean=0, std=tr_sigma, size=(1, 3)) if tr_update is None else tr_update
         rot_update = so3.sample_vec(eps=rot_sigma) if rot_update is None else rot_update
         torsion_updates = np.random.normal(loc=0.0, scale=tor_sigma, size=data['ligand'].edge_mask.sum()) if torsion_updates is None else torsion_updates
         torsion_updates = None if self.no_torsion else torsion_updates
-        if self.rng_gamma and random.random() < self.rng_gamma:
-            try:
-                if self.perturbs_cache_time is None or self.perturbs_cache_time != os.path.getmtime(f'perturbs_{gethostname()}_{self.local_rank}.pkl'):
-                    with open(f'perturbs_{gethostname()}_{self.local_rank}.pkl', 'rb') as pertub_file:
-                        self.perturbs = pickle.load(pertub_file)
-                    self.perturbs_cache_time = os.path.getmtime(f'perturbs_{gethostname()}_{self.local_rank}.pkl')
-                t_indices = list(self.perturbs.keys())
-                t_idx = random.choice(t_indices)
-                #t_indices.sort()
-                #t_idx = t_indices[int(random.betavariate(self.alpha, self.beta) * len(t_indices))]
-                tr_update = torch.tensor(random.choices(self.perturbs[t_idx][0], k=3)).reshape((1, 3))
-                rot_update = np.array(random.choices(self.perturbs[t_idx][1], k=3))
-                torsion_updates = np.array(random.choices(self.perturbs[t_idx][2], k=torsion_updates.shape[0]))
-
-                t_tr = self.perturbs[t_idx][3][0]
-                t_rot = self.perturbs[t_idx][3][1]
-                t_tor = self.perturbs[t_idx][3][2]
-                tr_sigma, rot_sigma, tor_sigma = self.t_to_sigma(t_tr, t_rot, t_tor)
-
-                true_tr_sigma = np.std(np.array(self.perturbs[t_idx][0]))
-                true_rot_sigma = np.std(np.array(self.perturbs[t_idx][1]))
-                true_tor_sigma = np.std(np.array(self.perturbs[t_idx][2]))
-                if true_tr_sigma > tr_sigma * self.rng_tr_eps:
-                  tr_update *= (tr_sigma * self.rng_tr_eps) / (true_tr_sigma)
-                if true_rot_sigma > rot_sigma * self.rng_rot_eps:
-                  rot_update *= (rot_sigma * self.rng_rot_eps) / (true_rot_sigma)
-                if true_tor_sigma > tor_sigma * self.rng_tor_eps:
-                  tor_update *= (tor_sigma * self.rng_tor_eps) / (true_tor_sigma)
-
-                set_time(data, t, t_tr, t_rot, t_tor, 1, self.all_atom, device=None, include_miscellaneous_atoms=self.include_miscellaneous_atoms)
-            except Exception as e:
-                print('Error sampling perturbs!')
-                print(e)
-
         try:
             modify_conformer(data, tr_update, torch.from_numpy(rot_update).float(), torsion_updates, no_kabsch=self.no_kabsch)
         except Exception as e:
