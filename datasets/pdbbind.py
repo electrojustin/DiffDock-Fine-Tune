@@ -16,7 +16,6 @@ from torch_geometric.data import Dataset, HeteroData
 from torch_geometric.transforms import BaseTransform
 from tqdm import tqdm
 from rdkit.Chem import RemoveAllHs
-import math
 
 from datasets.process_mols import read_molecule, get_lig_graph_with_matching, generate_conformer, moad_extract_receptor_structure
 from utils.diffusion_utils import modify_conformer, set_time
@@ -100,12 +99,6 @@ class NoiseTransform(BaseTransform):
                     with open(f'perturbs_{gethostname()}_{self.local_rank}.pkl', 'rb') as pertub_file:
                         self.perturbs = pickle.load(pertub_file)
                     self.perturbs_cache_time = os.path.getmtime(f'perturbs_{gethostname()}_{self.local_rank}.pkl')
-                    self.true_std = {}
-                    for t_idx in self.perturbs.keys():
-                      self.true_std[t_idx] = []
-                      self.true_std[t_idx].append(np.std(np.array(self.perturbs[t_idx][0])))
-                      self.true_std[t_idx].append(np.std(np.array(self.perturbs[t_idx][1])))
-                      self.true_std[t_idx].append(np.std(np.array(self.perturbs[t_idx][2])))
                 t_indices = list(self.perturbs.keys())
                 t_idx = random.choice(t_indices)
                 #t_indices.sort()
@@ -119,18 +112,15 @@ class NoiseTransform(BaseTransform):
                 t_tor = self.perturbs[t_idx][3][2]
                 tr_sigma, rot_sigma, tor_sigma = self.t_to_sigma(t_tr, t_rot, t_tor)
 
-                true_tr_sigma = self.true_std[t_idx][0]
-                true_rot_sigma = self.true_std[t_idx][1]
-                true_tor_sigma = self.true_std[t_idx][2]
-                tr_update *= ((math.sqrt(true_tr_sigma / tr_sigma) - 1.0) / self.rng_tr_eps + 1.0) * tr_sigma / true_tr_sigma
-                rot_update *= ((math.sqrt(true_rot_sigma / rot_sigma) - 1.0) / self.rng_rot_eps + 1.0) * rot_sigma / true_rot_sigma
-                torsion_updates *= ((math.sqrt(true_tor_sigma / tor_sigma) - 1.0) / self.rng_tor_eps + 1.0) * tor_sigma / true_tor_sigma
-                #if true_tr_sigma > tr_sigma * self.rng_tr_eps:
-                #  tr_update *= (tr_sigma * self.rng_tr_eps) / (true_tr_sigma)
-                #if true_rot_sigma > rot_sigma * self.rng_rot_eps:
-                #  rot_update *= (rot_sigma * self.rng_rot_eps) / (true_rot_sigma)
-                #if true_tor_sigma > tor_sigma * self.rng_tor_eps:
-                #  torsion_updates *= (tor_sigma * self.rng_tor_eps) / (true_tor_sigma)
+                true_tr_sigma = np.std(np.array(self.perturbs[t_idx][0]))
+                true_rot_sigma = np.std(np.array(self.perturbs[t_idx][1]))
+                true_tor_sigma = np.std(np.array(self.perturbs[t_idx][2]))
+                if true_tr_sigma > tr_sigma * self.rng_tr_eps:
+                  tr_update *= (tr_sigma * self.rng_tr_eps) / (true_tr_sigma)
+                if true_rot_sigma > rot_sigma * self.rng_rot_eps:
+                  rot_update *= (rot_sigma * self.rng_rot_eps) / (true_rot_sigma)
+                if true_tor_sigma > tor_sigma * self.rng_tor_eps:
+                  tor_update *= (tor_sigma * self.rng_tor_eps) / (true_tor_sigma)
 
                 set_time(data, t, t_tr, t_rot, t_tor, 1, self.all_atom, device=None, include_miscellaneous_atoms=self.include_miscellaneous_atoms)
             except Exception as e:
