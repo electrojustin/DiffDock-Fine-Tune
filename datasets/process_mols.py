@@ -18,39 +18,7 @@ from datasets.constants import aa_short2long, atom_order, three_to_one
 from datasets.parse_chi import get_chi_angles, get_coords, aa_idx2aa_short, get_onehot_sequence
 from utils.torsion import get_transformation_mask
 from utils.logging_utils import get_logger
-from utils.geometry import rigid_transform_Kabsch_3D_torch
-from utils.torsion import modify_conformer_torsion_angles
 
-def randomize_tor_angles(complex_graph):
-    torsion_updates = np.random.uniform(-(np.pi), np.pi, complex_graph['ligand'].edge_mask.sum(), **('low', 'high', 'size'))
-    complex_graph['ligand'].pos = modify_conformer_torsion_angles(
-                                        complex_graph['ligand'].pos,
-                                        complex_graph[('ligand', 'ligand')].edge_index.T[complex_graph['ligand'].edge_mask],
-                                        complex_graph['ligand'].mask_rotate, torsion_updates)
-    rot, tr = rigid_transform_Kabsch_3D_torch(complex_graph['ligand'].pos.T, torch.tensor(complex_graph['ligand'].orig_pos, dtype=torch.float32).T)
-    complex_graph['ligand'].pos = complex_graph['ligand'].pos @ rot.T + tr.T
-    return torsion_updates
-
-
-def estimate_tor_weights(complex_graph, trials=1000):
-    tor_updates = []
-    rmsds = []
-    for i in range(0, trials):
-        tor_update = randomize_tor_angles(complex_graph)
-        rmsd = np.sqrt(((complex_graph['ligand'].pos.cpu().numpy() - complex_graph['ligand'].orig_pos) ** 2).sum(axis=1).mean())
-        tor_updates.append(tor_update)
-        rmsds.append(rmsd)
-        complex_graph['ligand'].pos = torch.tensor(complex_graph['ligand'].orig_pos, dtype=torch.float32)
-    tor_updates = np.array(tor_updates) ** 2
-    rmsds = np.array(rmsds)
-    m, r, _, _ = np.linalg.lstsq(tor_updates, rmsds)
-    m = torch.tensor(m, dtype=torch.float32)
-    print(m)
-    print(r)
-    lower_threshold = 0.01
-    m = torch.where(m > lower_threshold, m, lower_threshold)
-    print(m)
-    return m / m.sum()
 
 periodic_table = GetPeriodicTable()
 allowable_features = {

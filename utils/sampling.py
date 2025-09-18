@@ -11,7 +11,6 @@ from utils.torsion import modify_conformer_torsion_angles
 from scipy.spatial.transform import Rotation as R
 from utils.utils import crop_beyond
 from utils.logging_utils import get_logger
-from utils.geometry import rigid_transform_Kabsch_3D_torch
 
 
 def randomize_position(data_list, no_torsion, no_random, tr_sigma_max, pocket_knowledge=False, pocket_cutoff=7,
