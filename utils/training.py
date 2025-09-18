@@ -12,7 +12,7 @@ from utils import so3, torus
 from utils.molecules_utils import get_symmetry_rmsd
 from utils.sampling import randomize_position, sampling
 from utils.diffusion_utils import get_t_schedule
-from torch.nn.functional import linear, sigmoid, leaky_relu
+from torch.nn.functional import linear, sigmoid
 
 
 def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_sigma, device, tr_weight=1, rot_weight=1,
@@ -62,17 +62,20 @@ def loss_function_ddp(tr_pred, rot_pred, tor_pred, sidechain_pred, data, t_to_si
                 torsion_weights = data['ligand'].heuristic_torsion_weights.cpu()
             else:
                 torsion_weights = data['ligand'].lin_torsion_weights.cpu()
+            torsion_weights *= len(torsion_weights)
             tor_loss *= torsion_weights
         elif weighted_tor == 7:
-            in_vec = (tor_pred - tor_score)**2
+            in_vec = tor_pred.cpu() - tor_score.cpu()
             weight1 = data['ligand'].nn_torsion_model[0]
             bias1 = data['ligand'].nn_torsion_model[1]
             weight2 = data['ligand'].nn_torsion_model[2]
             bias2 = data['ligand'].nn_torsion_model[3]
-            tor_loss = sigmoid(linear(leaky_relu(linear(in_vec, weight1, bias1), negative_slope=0.1), weight2, bias2)).cpu() * 2
+            weight3 = data['ligand'].nn_torsion_model[4]
+            bias3 = data['ligand'].nn_torsion_model[5]
+            tor_loss = linear(sigmoid(linear(sigmoid(linear(in_vec, weight1, bias1)), weight2, bias2)), weight3, bias3)
 
         tor_base_loss = ((tor_score.cpu() ** 2 / tor_score_norm2)).detach()
-        if apply_mean or weighted_tor == 7:
+        if apply_mean:
             tor_loss, tor_base_loss = tor_loss.mean() * torch.ones(1, dtype=torch.float), tor_base_loss.mean() * torch.ones(1, dtype=torch.float)
         else:
             index =  data['ligand'].batch[data['ligand', 'ligand'].edge_index[0][data['ligand'].edge_mask]]

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --time=05:00:00
+#SBATCH --time=03:00:00
 #SBATCH --mem=40GB
 #SBATCH --ntasks-per-node=1
 #SBATCH --job-name=AlloSet_DD_L

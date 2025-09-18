@@ -61,7 +61,6 @@ def get_dataset(args, model_args, confidence=False):
                     protein_file=args.protein_file,
                     ligand_file=args.ligand_file,
                     smile_file=args.smile_file,
-                    skip_tor_model=True,
                     slurm_array_idx=args.slurm_array_idx,
                     slurm_array_task_count=args.slurm_array_task_count,
                     knn_only_graph=True if not hasattr(args, 'not_knn_only_graph') else not args.not_knn_only_graph,

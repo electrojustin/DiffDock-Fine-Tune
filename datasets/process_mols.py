@@ -41,14 +41,15 @@ def create_tor_model(complex_graph, trials=1000):
         tor_updates.append(tor_update)
         rmsds.append(rmsd)
         complex_graph['ligand'].pos = torch.tensor(complex_graph['ligand'].orig_pos, dtype=torch.float32)
-    tor_updates = np.array(tor_updates) ** 2
+    tor_updates = np.array(tor_updates)
     rmsds = np.array(rmsds)
 
     tor_model = torch.nn.Sequential(
             torch.nn.Linear(tor_updates.shape[1], tor_updates.shape[1]),
-            torch.nn.LeakyReLU(negative_slope=0.1),
-            torch.nn.Linear(tor_updates.shape[1], 1),
             torch.nn.Sigmoid(),
+            torch.nn.Linear(tor_updates.shape[1], tor_updates.shape[1]),
+            torch.nn.Sigmoid(),
+            torch.nn.Linear(tor_updates.shape[1], 1),
     )
     max_rmsd = max(rmsds)
     loss_fn = torch.nn.MSELoss(reduction='sum')
@@ -56,7 +57,7 @@ def create_tor_model(complex_graph, trials=1000):
     tor_updates_tensor = torch.tensor(tor_updates, dtype=torch.float32)
     rmsds_tensor = torch.tensor(rmsds, dtype=torch.float32)
     for i in range(0, 100):
-        pred = tor_model(tor_updates_tensor)[0] / 0.9 * max_rmsd
+        pred = tor_model(tor_updates_tensor)[0] * max_rmsd
         loss = loss_fn(pred, rmsds_tensor)
         if i == 99:
             print('nn mse: ' + str(loss.item()))
@@ -64,12 +65,13 @@ def create_tor_model(complex_graph, trials=1000):
         loss.backward()
         optimizer.step()
 
+    tor_updates = tor_updates ** 2
     m, r, _, _ = np.linalg.lstsq(tor_updates, rmsds)
-    print('linear mse: ' + str(r[0]))
+    print('linear mse: ' + str(r))
     m = torch.tensor(m, dtype=torch.float32)
     lower_threshold = 0.01
     m = torch.where(m > lower_threshold, m, lower_threshold)
-    m = m / m.mean(dtype=torch.float32)
+    m = m / m.sum()
     return m, tor_model
 
 periodic_table = GetPeriodicTable()
@@ -372,7 +374,7 @@ def generate_conformer(mol):
     return False
 
 
-def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching, keep_original, num_conformers, remove_hs, tries=10, skip_matching=False, skip_tor_model=False):
+def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching, keep_original, num_conformers, remove_hs, tries=10, skip_matching=False):
     if matching:
         mol_maybe_noh = copy.deepcopy(mol_)
         if remove_hs:
@@ -433,10 +435,10 @@ def get_lig_graph_with_matching(mol_, complex_graph, popsize, maxiter, matching,
     complex_graph['ligand'].edge_mask = torch.tensor(edge_mask)
     complex_graph['ligand'].mask_rotate = mask_rotate
     complex_graph['ligand'].heuristic_torsion_weights = weight
-    if not skip_tor_model:
-        lin_model, nn_model = create_tor_model(complex_graph)
-        complex_graph['ligand'].lin_torsion_weights = lin_model
-        complex_graph['ligand'].nn_torsion_model = list(map(lambda x: x.data, nn_model.parameters()))
+    lin_model, nn_model = create_tor_model(complex_graph)
+    complex_graph['ligand'].lin_torsion_weights = lin_model
+    #print(list(nn_model.parameters()))
+    complex_graph['ligand'].nn_torsion_model = list(map(lambda x: x.data, nn_model.parameters()))
 
     return
 
