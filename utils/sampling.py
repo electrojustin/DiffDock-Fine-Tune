@@ -102,7 +102,6 @@ def sampling(data_list, model, inference_steps, tr_schedule, rot_schedule, tor_s
                 tr_sigma, rot_sigma, tor_sigma = t_to_sigma(t_tr, t_rot, t_tor)
 
                 if hasattr(model_args, 'crop_beyond') and model_args.crop_beyond is not None:
-                    #print('Cropping beyond', tr_sigma * 3 + model_args.crop_beyond, 'for score model')
                     mod_complex_graph_batch = copy.deepcopy(complex_graph_batch).to_data_list()
                     for batch in mod_complex_graph_batch:
                         crop_beyond(batch, tr_sigma * 3 + model_args.crop_beyond, model_args.all_atoms)

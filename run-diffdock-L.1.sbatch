@@ -1,12 +1,12 @@
 #!/bin/bash
 
-#SBATCH --time=03:00:00
+#SBATCH --time=06:00:00
 #SBATCH --mem=40GB
 #SBATCH --ntasks-per-node=1
 #SBATCH --job-name=AlloSet_DD_L
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks 1
-#SBATCH --cpus-per-task 2
+#SBATCH --cpus-per-task 12
 #SBATCH --mail-type=BEGIN,END
 #SBATCH --mail-user=jeg10045@nyu.edu
 
