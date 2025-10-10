@@ -245,6 +245,8 @@ class LazyPDBBindSet(Dataset):
                                             atom_max_neighbors=self.atom_max_neighbors)
             if orig_lig_pos is not None:
                 complex_graph['ligand'].orig_pos = orig_lig_pos
+                rot, tr = rigid_transform_Kabsch_3D_torch(complex_graph['ligand'].pos.T, torch.tensor(complex_graph['ligand'].orig_pos, dtype=torch.float32).T)
+                complex_graph['ligand'].pos = complex_graph['ligand'].pos @ rot.T + tr.T
 
         except Exception as e:
             print(f'Skipping {name} because of the error:')

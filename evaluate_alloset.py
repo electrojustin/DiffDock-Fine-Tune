@@ -46,7 +46,7 @@ def get_dataset(args, model_args, confidence=False):
     dataset = LazyPDBBindSet(transform=None, root=args.data_dir, limit_complexes=args.limit_complexes, dataset=args.dataset,
                     chain_cutoff=args.chain_cutoff,
                     receptor_radius=model_args.receptor_radius,
-                    cache_path=model_args.cache_path, split_path=args.split_path,
+                    cache_path=args.cache_path, split_path=args.split_path,
                     remove_hs=model_args.remove_hs, max_lig_size=None,
                     c_alpha_max_neighbors=model_args.c_alpha_max_neighbors,
                     matching=not model_args.no_torsion, keep_original=True,

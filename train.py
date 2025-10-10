@@ -137,13 +137,13 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
                   .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
             logs.update({'traininf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
-        if args.val_inference_freq != None and epoch % args.val_inference_freq == 0:
+        if args.val_inference_freq != None and (epoch + 1) % args.val_inference_freq == 0:
             inf_metrics = inference_epoch_fix(model, val_loader, args.device, t_to_sigma, args)
             print("Epoch {}: Val inference rmsd_median {:.3f} rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f} centroid_median {:.3f} centroid_lt2 {:.3f} centroid_lt5 {:.3f} min_centroid_lt2 {:.3f} min_centroid_lt5 {:.3f}"
                   .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
             logs.update({'valinf_' + k: v for k, v in inf_metrics.items()}, step=epoch)
 
-        if args.pdbbind_inference_freq != None and epoch % args.pdbbind_inference_freq == 0:
+        if args.pdbbind_inference_freq != None and (epoch + 1) % args.pdbbind_inference_freq == 0:
             inf_metrics = inference_epoch_fix(model, pdbbind_loader, args.device, t_to_sigma, args)
             print("Epoch {}: PDBBind inference rmsd_median {:.3f} rmsds_lt2 {:.3f} rmsds_lt5 {:.3f} min_rmsds_lt2 {:.3f} min_rmsds_lt5 {:.3f} centroid_median {:.3f} centroid_lt2 {:.3f} centroid_lt5 {:.3f} min_centroid_lt2 {:.3f} min_centroid_lt5 {:.3f}"
                   .format(epoch, inf_metrics['rmsd_median'], inf_metrics['rmsds_lt2'], inf_metrics['rmsds_lt5'], inf_metrics['min_rmsds_lt2'], inf_metrics['min_rmsds_lt5'], inf_metrics['centroid_median'], inf_metrics['centroid_lt2'], inf_metrics['centroid_lt5'], inf_metrics['min_centroid_lt2'], inf_metrics['min_centroid_lt5']))
@@ -173,7 +173,7 @@ def train(args, model, optimizer, scheduler, ema_weights, train_loader, val_load
         state_dict = model.module.state_dict() if device.type == 'cuda' and not (args.no_parallel or args.DDP) else model.state_dict()
         if args.inference_earlystop_metric in logs.keys() and \
                 (args.inference_earlystop_goal == 'min' and logs[args.inference_earlystop_metric] <= best_val_inference_value or
-                 args.inference_earlystop_goal == 'max' and logs[args.inference_earlystop_metric] >= best_val_inference_value):
+                 args.inference_earlystop_goal == 'max' and logs[args.inference_earlystop_metric] >= best_val_inference_value) and (not args.DDP or args.rank == 0):
             best_val_inference_value = logs[args.inference_earlystop_metric]
             best_val_inference_epoch = epoch
             torch.save({
