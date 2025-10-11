@@ -9,7 +9,7 @@ import sys
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-for in_file in glob.glob('./*/*_ligand.*'):
+for in_file in glob.glob(sys.argv[1] + '*/*_ligand.*'):
   if 'fixed' in in_file:
     continue
   dir_name = os.path.dirname(in_file)

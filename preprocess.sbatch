@@ -7,4 +7,6 @@
 #SBATCH --mem=60G
 #SBATCH --job-name=cache-hetgraphs
 
-singularity exec --nv --overlay /scratch/jeg10045/zhang_lab/overlay-50G-10M.ext3:ro /scratch/work/public/singularity/ubuntu-24.04.sif ./gen-diffdock-cache.sh
+source config.sh
+
+singularity exec --nv --overlay ${OVERLAY_PATH}:ro $SIF_PATH ./preprocess.sh
