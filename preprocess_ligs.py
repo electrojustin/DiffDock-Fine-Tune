@@ -9,7 +9,9 @@ import sys
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-for in_file in glob.glob(sys.argv[1] + '*/*_ligand.*'):
+working_dir = os.getcwd()
+
+for in_file in glob.glob(sys.argv[1] + '/*/*_ligand.*'):
   if 'fixed' in in_file:
     continue
   dir_name = os.path.dirname(in_file)
@@ -119,6 +121,6 @@ for in_file in glob.glob(sys.argv[1] + '*/*_ligand.*'):
     print('Failed to process ' + base_name)
     print(traceback.format_exc())
 
-  os.chdir('../')
+  os.chdir(working_dir)
 
 print('Last processed: ' + dir_name)
