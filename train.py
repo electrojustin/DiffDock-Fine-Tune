@@ -404,21 +404,10 @@ def main_function():
                 model.module.load_state_dict(chkpt, strict=True)
             except:
                 model.load_state_dict(chkpt, strict=True)
-        # try:
-        #     model.module.load_state_dict(chkpt, strict=True)
-        # except:
-        #     model.load_state_dict(chkpt, strict=True)
         print("Using pretrained model", f'{args.pretrain_dir}/{args.pretrain_ckpt}.pt')
 
     numel = sum([p.numel() for p in model.parameters()])
     print('Model with', numel, 'parameters')
-
-    # if args.wandb:
-    #     if args.DDP:
-    #         if args.local_rank==0:
-    #             wandb.log({'numel': numel})
-    #     else:
-    #         wandb.log({'numel': numel})
 
     run_dir = os.path.join(args.log_dir, args.run_name)
     args.device = device
@@ -441,10 +430,6 @@ def main_function():
         train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, pdbbind_loader)
         profiler.disable()
         profiler.print_stats(sort='tottime')
-        #s = io.StringIO()
-        #stats = pstats.Stats(profiler, stream=s)
-        #stats.sort_stats('tottime')
-        #stats.print_stats()
     else:
         train(args, model, optimizer, scheduler, ema_weights, train_loader, val_loader, t_to_sigma, run_dir, pdbbind_loader)
 
