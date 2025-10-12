@@ -57,7 +57,7 @@ Once config.sh is properly set up, preprocessing should be
 
     sbatch preprocess.sbatch
 
-Note that this will attempt to launch a job on a 48 core general compute node. Please adjust `cpus-per-task` in preprocess.sbatch if this isn't feasible on your HPC.
+Note that this will attempt to launch a job on a 48 core general compute node. Please adjust `cpus-per-task` in `preprocess.sbatch` if this isn't feasible on your HPC.
 
 ### Training
 
@@ -65,7 +65,7 @@ After preprocessing is complete, training can be started by running
 
     sbatch train_diffdock.sbatch
 
-Note that this will attempt to launch a job on a GPU node with 4 open GPUs that lasts 2 days. Please adjust `tasks` and `gres` in `train_diffdock.sbatch` if your HPC does not have GPU nodes with 4 GPUs. Note that this will likely make training take longer.
+Note that this will attempt to launch a job on a GPU node with 4 open GPUs that lasts 2 days. Please adjust `tasks` and `gres` in `train_diffdock.sbatch` if your HPC does not have GPU nodes with 4 GPUs. Both variables must match the number of GPUs. Note that reducing this number from 4 will likely make training take longer.
 
 ## Testing
 

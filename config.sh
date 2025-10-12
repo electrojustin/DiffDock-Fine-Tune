@@ -17,13 +17,13 @@ export OVERLAY_PATH=/scratch/jeg10045/zhang_lab/overlay-50G-10M.ext3
 # Path to singularity image file.
 export SIF_PATH=/scratch/work/public/singularity/ubuntu-24.04.sif
 # Path to the directory where the ESM embeddings were deposited.
-export ESM_EMBEDDINGS_PATH=/vast/eac709/allo_crossdock/DiffDock-L/AlloSet/241120/data/esm2/
+export ESM_EMBEDDINGS_PATH=cleanup_test_dataset_esm
 # Path to dataset. This is expected to be a directory containing subdirectories
 # for each complex named in the form PDBID_CHAIN_LIGNAME. For example,
 # 7wcl_A_8ZF. Each subdirectory is expected to contain two files: an apo
 # protein PDB file named PDBID_protein.pdb, and a ligand PDF file named
 # PDBID_ligand.pdb.
-export DATASET_PATH=data/cleanup_test_dataset
+export DATASET_PATH=cleanup_test_dataset
 # File containing a list of the complexes used for training. These complexes
 # follow the same naming scheme as the subdirectories in the dataset directory.
 export TRAIN_SPLIT_PATH=../../../final_allo_only_splits_250604/train.txt
@@ -61,4 +61,4 @@ export PRETRAIN_DIR='workdir/v1.1/score_model/'
 # Name of the checkpoint used as the pretrain model.
 export PRETRAIN_CKPT='best_ema_inference_epoch_model'
 # Name of the conda environment where DiffDock dependencies were installed.
-export CONDA_NAME=diffdock
+export CONDA_NAME=diffdock-pocket

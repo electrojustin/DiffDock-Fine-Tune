@@ -7,8 +7,6 @@
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks 1
 #SBATCH --cpus-per-task 12
-#SBATCH --mail-type=BEGIN,END
-#SBATCH --mail-user=jeg10045@nyu.edu
 
 source config.sh
 
