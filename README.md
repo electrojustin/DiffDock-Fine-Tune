@@ -29,7 +29,7 @@ If using wandb.ai to track training progress, wandb can be set up by following j
 
 ## Dataset Preparation
 
-These scripts have been written assuming a rather specific layout of the dataset being used for both training and testing. We assume that both trainingand testing data are co-located in the same directory, and the distrinction between training and testing is managed through "split files", which are just plain text documents containing lists of complexes. Complexes need to be named in the form "{PDB ID}_{CHAIN ID}_{LIGAND NAME}_{OPTIONAL SUFFIX}". The dataset directory is assumed to contain sub-directories of each complex. Each sub-directory should contain 2 files: a protein file, and a ligand file. The protein files should contain the apo chain of the protein in the complex, while the ligand file should contain all the HETATM entries consisting of the ligand in the complex. The protein file should be named using the scheme "{PDB ID}_protein.pdb", while the ligand file should be named like "{PDB ID}_ligand.pdb". Each complex sub-directory should only contain one protein chain and one ligand, so higher order complexes need to be broken up accordingly. An example dataset directory might look like this:
+These scripts have been written assuming a rather specific layout of the dataset being used for both training and testing. We assume that both trainingand testing data are co-located in the same directory, and the distrinction between training and testing is managed through "split files", which are just plain text documents containing lists of complexes. Complexes need to be named in the form `{PDB ID}_{CHAIN ID}_{LIGAND NAME}_{OPTIONAL SUFFIX}`. The dataset directory is assumed to contain sub-directories of each complex. Each sub-directory should contain 2 files: a protein file, and a ligand file. The protein files should contain the apo chain of the protein in the complex, while the ligand file should contain all the HETATM entries consisting of the ligand in the complex. The protein file should be named using the scheme `{PDB ID}_protein.pdb`, while the ligand file should be named like `{PDB ID}_ligand.pdb`. Each complex sub-directory should only contain one protein chain and one ligand, so higher order complexes need to be broken up accordingly. An example dataset directory might look like this:
 
     my_dataset/8ssp_A_627_510/8ssp_protein.pdb
     my_dataset/8ssp_A_627_510/8ssp_ligand.pdb
@@ -42,7 +42,7 @@ It's still necessary to generate ESM embeddings for all the proteins in the data
 
 ## Configuration
 
-The last manual step in setting up DiffDock is to edit the configuration file, config.sh. This file contains a number of configuration variables (e.g. run names, input data paths, etc.) needed by downstream scripts. See the comments in config.sh for more details on what each variable means.
+The last manual step in setting up DiffDock is to edit the configuration file, `config.sh`. This file contains a number of configuration variables (e.g. run names, input data paths, etc.) needed by downstream scripts. See the comments in `config.sh` for more details on what each variable means.
 
 ## Training
 
@@ -50,7 +50,7 @@ The last manual step in setting up DiffDock is to edit the configuration file, c
 
 While the training code can theoretically be run with no preprocessing step and will simply perform preprocessing on the fly in the dataloader thread, in practice, some ligands with a large number of rotatable bonds will take excessive amounts of CPU time in the conformer matching stage. In order to make the most efficient use of GPU node time, we've shuffled much of the CPU expensive operations into a discrete preprocessing step that can be run on a general compute node.
 
-Our preprocessing scripts also take care of the problem of hydrogenation. Because most crystal structures lack hydrogens, there are some ambiguities in how the ligand file should be loaded, and RDKit, the library DiffDock uses for managing this purpose, often makes mistakes. In particular, RDKit doesn't seem readily able to distinguish between aromatic and cycloalkane rings in PDB files, which can have a profound impact on model performance. Our preprocessing scripts take care of this problem by explicitly adding hydrogens to the ligand and converting it to an SDF file. See preprocess_ligs.py for details on the algorithm.
+Our preprocessing scripts also take care of the problem of hydrogenation. Because most crystal structures lack hydrogens, there are some ambiguities in how the ligand file should be loaded, and RDKit, the library DiffDock uses for managing this purpose, often makes mistakes. In particular, RDKit doesn't seem readily able to distinguish between aromatic and cycloalkane rings in PDB files, which can have a profound impact on model performance. Our preprocessing scripts take care of this problem by explicitly adding hydrogens to the ligand and converting it to an SDF file. `See preprocess_ligs.py` for details on the algorithm.
 
 Once config.sh is properly set up, preprocessing should be 
  as easy as running
@@ -65,7 +65,7 @@ After preprocessing is complete, training can be started by running
 
     sbatch train_diffdock.sbatch
 
-Note that this will attempt to launch a job on a GPU node with 4 open GPUs that lasts 2 days. Please adjust `tasks` and `gres` in train_diffdock.sbatch if your HPC does not have GPU nodes with 4 GPUs. Note that this will likely make training take longer.
+Note that this will attempt to launch a job on a GPU node with 4 open GPUs that lasts 2 days. Please adjust `tasks` and `gres` in `train_diffdock.sbatch` if your HPC does not have GPU nodes with 4 GPUs. Note that this will likely make training take longer.
 
 ## Testing
 
