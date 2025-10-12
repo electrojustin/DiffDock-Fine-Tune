@@ -10,12 +10,12 @@ source /scratch/work/public/singularity/greene-ib-slurm-bind.sh
 
 # Name of the slurm module that provides CUDA bindings.
 export CUDA_MODULE_NAME=cuda/11.6.2
+# Name of the slurm module that provides OpenBabel.
+export OBABEL_MODULE_NAME=openbabel/intel/3.1.1
 # Path to the singularity container where DiffDock dependencies were installed.
 export OVERLAY_PATH=/scratch/jeg10045/zhang_lab/overlay-50G-10M.ext3
 # Path to singularity image file.
 export SIF_PATH=/scratch/work/public/singularity/ubuntu-24.04.sif
-# Name of the conda environment where DiffDock dependencies were installed.
-export CONDA_NAME=diffdock-pocket
 # Path to the directory where the ESM embeddings were deposited.
 export ESM_EMBEDDINGS_PATH=/vast/eac709/allo_crossdock/DiffDock-L/AlloSet/241120/data/esm2/
 # Path to dataset. This is expected to be a directory containing subdirectories
@@ -33,9 +33,9 @@ export TRAIN_SPLIT_PATH=../../../final_allo_only_splits_250604/train.txt
 export VAL_SPLIT_PATH=../../../final_allo_only_splits_250604/val_x4.txt
 # Maximum number of epochs to train for.
 export NUM_EPOCHS=5000
-# WANDB entity name
+# WANDB entity name. Leave blank to disable WANDB.
 export WANDB_ENTITY=jeg10045-new-york-university
-# WANDB project name
+# WANDB project name. Leave blank if not using WANDB.
 export WANDB_PROJECT=diffdock-tune
 # Run name. This will both be the WANDB run name, and the name of the model.
 # The fine tuned model will be put in a directory named
@@ -60,3 +60,5 @@ export CACHE_PATH=data/cache
 export PRETRAIN_DIR='workdir/v1.1/score_model/'
 # Name of the checkpoint used as the pretrain model.
 export PRETRAIN_CKPT='best_ema_inference_epoch_model'
+# Name of the conda environment where DiffDock dependencies were installed.
+export CONDA_NAME=diffdock

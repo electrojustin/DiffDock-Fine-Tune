@@ -9,4 +9,6 @@
 
 source config.sh
 
+module load $OBABEL_MODULE_NAME
+
 singularity exec --nv --overlay ${OVERLAY_PATH}:ro $SIF_PATH ./preprocess.sh

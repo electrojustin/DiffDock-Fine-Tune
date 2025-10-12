@@ -297,7 +297,7 @@ def main_function():
     else:
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-    if args.wandb:
+    if args.wandb and args.entity:
         wandb_args = {
             'entity':args.entity,
             'settings':wandb.Settings(start_method="fork"),
