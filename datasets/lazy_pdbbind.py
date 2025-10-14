@@ -188,7 +188,7 @@ class LazyPDBBindSet(Dataset):
 
     def get_complex(self, name, lm_embedding_chains):
         if not os.path.exists(os.path.join(self.pdbbind_dir, name)):
-            print("Folder not found", name)
+            print("Folder not found ", os.path.join(self.pdbbind_dir, name))
             return None, None,
 
         try:
