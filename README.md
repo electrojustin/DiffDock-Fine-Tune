@@ -38,13 +38,13 @@ These scripts have been written assuming a rather specific layout of the dataset
 
 ## ESM Embedding Preparation
 
-It's still necessary to generate ESM embeddings for all the proteins in the dataset. In order to do this, simply [follow the instructions outlined in the original DiffDock repo](https://github.com/gcorso/DiffDock/blob/main/README.md#generate-the-esm2-embeddings-for-the-proteins), *but skip the very last step, where it says to run esm_embeddings_to_pt.py*. This last step collates all the ESM embeddings in the dataset into one big file, which we have noticed can sometimes cause out of memory issues. Instead, we have modified the dataloader to process the ESM bindings as individual files to keep the memory footprint down.
+It's still necessary to generate ESM embeddings for all the proteins in the dataset. In order to do this, simply [follow the instructions outlined in the original DiffDock repo](https://github.com/gcorso/DiffDock/blob/main/README.md#generate-the-esm2-embeddings-for-the-proteins), *but skip the very last step, where it says to run esm_embeddings_to_pt.py*. This last step collates all the ESM embeddings in the dataset into one big file, which we have noticed can sometimes cause out of memory issues. Instead, we have modified the dataloader to process the ESM embeddings as individual files to keep the memory footprint down.
 
 ## Configuration
 
 The last manual step in setting up DiffDock is to edit the configuration file, `config.sh`. This file contains a number of configuration variables (e.g. run names, input data paths, etc.) needed by downstream scripts. See the comments in `config.sh` for more details on what each variable means.
 
-## Training
+## Fine Tuning
 
 ### Preprocessing
 
@@ -68,7 +68,7 @@ Note that this will attempt to launch a job on a GPU node with 4 open GPUs that 
 
 ## Testing
 
-### Evaluating The Model
+### Running The Model
 
 Unlike the preprocessing and training scripts, the model eval script is designed to be run as an array job, since model evalutation is easily parallelizable in a way that doesn't require communication between workers. To evaluate the model's performance on the test dataset, simply run
 

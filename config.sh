@@ -47,7 +47,7 @@ export EVAL_SPLIT_PATH=../../../final_allo_only_splits_250604/test.txt
 # Directory where the eval results will be stored. This will include both
 # snapshots of the reverse diffusion process in PDB form and aggregate
 # statistics stored as numpy files.
-export RESULTS_DIR=./baseline_results
+export RESULTS_DIR=./cleanup_results
 
 
 ###############################################################################
