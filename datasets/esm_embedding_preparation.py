@@ -7,7 +7,7 @@ from Bio.SeqRecord import SeqRecord
 from tqdm import tqdm
 from Bio import SeqIO
 
-from datasets.constants import three_to_one
+from constants import three_to_one
 
 parser = ArgumentParser()
 parser.add_argument('--out_file', type=str, default="data/prepared_for_esm.fasta")
@@ -54,10 +54,13 @@ if args.dataset == 'pdbbind':
 
     for name in tqdm(names):
         if name == '.DS_Store': continue
-        if os.path.exists(os.path.join(data_dir, name, f'{name}_protein_processed.pdb')):
-            rec_path = os.path.join(data_dir, name, f'{name}_protein_processed.pdb')
+        short_name = name.split('_')[0]
+        if os.path.exists(os.path.join(data_dir, name, f'{short_name}_protein_processed.pdb')):
+            rec_path = os.path.join(data_dir, name, f'{short_name}_protein_processed.pdb')
+        elif os.path.exists(os.path.join(data_dir, name, f'{short_name}_protein.pdb')):
+            rec_path = os.path.join(data_dir, name, f'{short_name}_protein.pdb')
         else:
-            rec_path = os.path.join(data_dir, name, f'{name}_protein.pdb')
+            print(f'Error processing {name}')
         l = get_structure_from_file(rec_path)
         for i, seq in enumerate(l):
             sequences.append(seq)

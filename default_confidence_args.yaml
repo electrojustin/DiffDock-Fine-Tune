@@ -8,7 +8,7 @@ inf_sched_beta: 1
 inference_steps: 20
 initial_noise_std_proportion: 1.4601642460337794
 limit_failures: 5
-#model_dir: ./workdir/v1.1/score_model
+model_dir: ./workdir/v1.1/score_model
 no_final_step_noise: true
 no_model: false
 no_random: false

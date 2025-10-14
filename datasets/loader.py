@@ -1,12 +1,30 @@
 import torch
+from torch.utils.data.distributed import DistributedSampler
 from torch_geometric.data import Dataset
+import setproctitle
 
 from datasets.dataloader import DataLoader, DataListLoader
 from datasets.moad import MOAD
 from datasets.pdb import PDBSidechain
-from datasets.pdbbind import NoiseTransform, PDBBind
+from datasets.pdbbind import NoiseTransform
+from datasets.lazy_pdbbind import LazyPDBBindSet
 from utils.utils import read_strings_from_txt
 
+class CombineLazyPDBBindSet(Dataset):
+    def __init__(self, complex_graphs, confidence_complex_graphs):
+        super(CombineLazyPDBBindSet, self).__init__()
+        self.complex_graphs = complex_graphs
+        self.confidence_complex_graphs = confidence_complex_graphs
+
+    def len(self):
+        return self.complex_graphs.len()
+
+    def get(self, idx):
+        complex_graph = self.complex_graphs.get(idx)
+        if complex_graph is None:
+            return None
+        confidence_graph = self.confidence_complex_graphs.get_by_name(complex_graph.name)
+        return (complex_graph, confidence_graph)
 
 class CombineDatasets(Dataset):
     def __init__(self, dataset1, dataset2):
@@ -79,10 +97,10 @@ def construct_loader(args, t_to_sigma, device):
                        'matching_tries': args.matching_tries}
 
         if args.dataset == 'pdbbind' or args.dataset == 'generalisation' or args.combined_training:
-            train_dataset = PDBBind(cache_path=args.cache_path, split_path=args.split_train, keep_original=True,
+            train_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', cache_path=args.cache_path, split_path=args.split_train, keep_original=True,
                                     num_conformers=args.num_conformers, root=args.pdbbind_dir,
                                     esm_embeddings_path=args.pdbbind_esm_embeddings_path,
-                                    protein_file=args.protein_file, **common_args)
+                                    protein_file=args.protein_file, require_ligand=True, max_receptor_size=args.max_receptor_size, **common_args)
 
         if args.dataset == 'moad' or args.combined_training:
             train_dataset2 = MOAD(cache_path=args.cache_path, split='train', keep_original=True,
@@ -101,9 +119,9 @@ def construct_loader(args, t_to_sigma, device):
                 train_dataset = train_dataset2
 
         if args.dataset == 'pdbbind' or args.double_val:
-            val_dataset = PDBBind(cache_path=args.cache_path, split_path=args.split_val, keep_original=True,
+            val_dataset = LazyPDBBindSet(ligand_file='fixed_ligand', cache_path=args.cache_path, split_path=args.split_val, keep_original=True,
                                   esm_embeddings_path=args.pdbbind_esm_embeddings_path, root=args.pdbbind_dir,
-                                  protein_file=args.protein_file, require_ligand=True, **common_args)
+                                  protein_file=args.protein_file, require_ligand=True, max_receptor_size=args.max_receptor_size, **common_args)
             if args.double_val:
                 val_dataset2 = val_dataset
 
@@ -117,7 +135,11 @@ def construct_loader(args, t_to_sigma, device):
 
         loader_class = DataListLoader if torch.cuda.is_available() else DataLoader
 
-    train_loader = loader_class(dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
-    val_loader = loader_class(dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=False, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
+    if args.DDP:
+        train_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(train_dataset), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('dataloader_'+str(worker_id)))
+        val_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(val_dataset, shuffle=False), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('dataloader_'+str(worker_id)))
+    else:
+        train_loader = loader_class(prefetch_factor=args.dataloader_prefetch_factor, dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
+        val_loader = loader_class(prefetch_factor=args.dataloader_prefetch_factor, dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=False, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
     return train_loader, val_loader, val_dataset2
 

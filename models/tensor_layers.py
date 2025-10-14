@@ -127,7 +127,7 @@ def tp_scatter_simple(tp, fc_layer, node_attr, edge_index, edge_attr, edge_sh,
     """
     Perform TensorProduct + scatter operation, aka graph convolution.
 
-    This function is only for edge_groups == 1. For multiple edge groups, and for larger graphs,
+    This function is only for out_irrepss == 1. For multiple edge groups, and for larger graphs,
     use tp_scatter_multigroup instead.
     """
 
