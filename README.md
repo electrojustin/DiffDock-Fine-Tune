@@ -29,12 +29,18 @@ If using wandb.ai to track training progress, wandb can be set up by following j
 
 ## Dataset Preparation
 
-These scripts have been written assuming a rather specific layout of the dataset being used for both training and testing. We assume that both training and testing data are co-located in the same directory, and the distrinction between training and testing is managed through "split files", which are just plain text documents containing lists of complexes. Complexes need to be named in the form `{PDB ID}_{CHAIN ID}_{LIGAND NAME}_{OPTIONAL SUFFIX}`. The dataset directory is assumed to contain sub-directories of each complex. Each sub-directory should contain 2 files: a protein file, and a ligand file. The protein files should contain the chain of the apo protein that actually binds to the ligand, while the ligand file should contain all the HETATM entries consisting of the ligand. The protein file should be named using the scheme `{PDB ID}_protein.pdb`, while the ligand file should be named like `{PDB ID}_ligand.pdb`. Each complex sub-directory should only contain one protein chain and one ligand, so higher order complexes need to be broken up accordingly. An example dataset directory might look like this:
+You can find this kinase ligand dataset version used for pretraining on Zenodo at [doi:10.5281/zenodo.17373044](https://doi.org/10.5281/zenodo.17373044)
+
+These scripts have been written assuming a rather specific layout of the dataset being used for both training and testing. The dataset cross-references the KLIFS resource and the Modi and Dunbrack dataset for kinase–ligand complexes obtained on 11/20/24. Ions, crystallizing artifacts, and small molecules as defined by the AF3 are removed. The residues are renumbered according to the UniProt numbering from SIFTS.
+
+We assume that both training and testing data are co-located in the same directory, and the distrinction between training and testing is managed through "split files", which are just plain text documents containing lists of complexes. Complexes need to be named in the form `{PDB ID}_{CHAIN ID}_{LIGAND NAME}_{OPTIONAL SUFFIX}`. The dataset directory is assumed to contain sub-directories of each complex. Each sub-directory should contain 2 files: a protein file, and a ligand file. The protein files should contain the chain of the apo protein that actually binds to the ligand, while the ligand file should contain all the HETATM entries consisting of the ligand. The protein file should be named using the scheme `{PDB ID}_protein.pdb`, while the ligand file should be named like `{PDB ID}_ligand.pdb`. Each complex sub-directory should only contain one protein chain and one ligand, so higher order complexes need to be broken up accordingly. An example dataset directory might look like this:
 
     my_dataset/8ssp_A_627_510/8ssp_protein.pdb
     my_dataset/8ssp_A_627_510/8ssp_ligand.pdb
     my_dataset/8ssp_A_PDO_507/8ssp_protein.pdb
     my_dataset/8ssp_A_PDO_507/8ssp_ligand.pdb
+
+Each ligand has also been preprocessed further to explicitly defines hydrogen positions in the ligand files. For each ligand in the dataset, we use OpenBabel to predict hydrogens at the pH of 7.4. Then, we use RDKit to check for the proper hydrogenation and charge definitions of imidazole, amino, nitro, tetrazole, and carboxyl groups and correct them if they contain chemical violations. Finally, a "corrected" ligand file `<pdb>_fixed_ligand.sdf` file is produced with explicit hydrogens.
 
 ## ESM Embedding Preparation
 
