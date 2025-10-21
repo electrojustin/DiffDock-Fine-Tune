@@ -1,9 +1,7 @@
-import os
-from argparse import ArgumentParser
-
 import torch
 from tqdm import tqdm
-
+from argparse import ArgumentParser
+import os
 
 parser = ArgumentParser()
 parser.add_argument('--esm_embeddings_path', type=str, default='data/BindingMOAD_2020_ab_processed_biounit/moad_sequences_new', help='')

@@ -1,7 +1,9 @@
+import traceback
 import copy
 import os
 import torch
 import sys
+import time
 from datasets.moad import MOAD
 from utils.gnina_utils import get_gnina_poses
 from utils.molecules_utils import get_symmetry_rmsd
@@ -19,10 +21,13 @@ from functools import partial
 import numpy as np
 # import wandb
 from rdkit import RDLogger
-from torch_geometric.loader import DataLoader
+from torch_geometric.loader import DataLoader as GeometricDataLoader
 from rdkit.Chem import RemoveAllHs
 
-from datasets.alloset import AlloSet
+from utils.download import download_and_extract
+from datasets.lazy_pdbbind import LazyPDBBindSet
+from datasets.loader import CombineLazyPDBBindSet
+from torch.utils.data import DataLoader
 from utils.diffusion_utils import t_to_sigma as t_to_sigma_compl, get_t_schedule
 from utils.sampling import randomize_position, sampling
 from utils.utils import get_model, ExponentialMovingAverage, read_strings_from_txt
@@ -33,9 +38,12 @@ RDLogger.DisableLog('rdApp.*')
 import yaml
 import pickle
 
+REPOSITORY_URL = os.environ.get("REPOSITORY_URL", "https://github.com/gcorso/DiffDock")
+REMOTE_URLS = [f"{REPOSITORY_URL}/releases/latest/download/diffdock_models.zip",
+               f"{REPOSITORY_URL}/releases/download/v1.1/diffdock_models.zip"]
 
 def get_dataset(args, model_args, confidence=False):
-    dataset = AlloSet(transform=None, root=args.data_dir, limit_complexes=args.limit_complexes, dataset=args.dataset,
+    dataset = LazyPDBBindSet(transform=None, root=args.data_dir, limit_complexes=args.limit_complexes, dataset=args.dataset,
                     chain_cutoff=args.chain_cutoff,
                     receptor_radius=model_args.receptor_radius,
                     cache_path=args.cache_path, split_path=args.split_path,
@@ -52,18 +60,28 @@ def get_dataset(args, model_args, confidence=False):
                     num_workers=args.num_workers,
                     protein_file=args.protein_file,
                     ligand_file=args.ligand_file,
+                    smile_file=args.smile_file,
+                    slurm_array_idx=args.slurm_array_idx,
+                    slurm_array_task_count=args.slurm_array_task_count,
                     knn_only_graph=True if not hasattr(args, 'not_knn_only_graph') else not args.not_knn_only_graph,
                     include_miscellaneous_atoms=False if not hasattr(args,'include_miscellaneous_atoms') else args.include_miscellaneous_atoms,
                     num_conformers=args.samples_per_complex if args.resample_rdkit and not confidence else 1)
     return dataset
 
+# Sometimes the model saving code will erroneously append "module" to all the state variable names.
+def state_dict_fixup(old_state_dict):
+    fixed_state_dict = {}
+    for key in old_state_dict.keys():
+        new_key = key.replace('module.', '')
+        fixed_state_dict[new_key] = old_state_dict[key]
+    return fixed_state_dict
 
 
 if __name__ == '__main__':
     cache_name = datetime.now().strftime('date%d-%m_time%H-%M-%S.%f')
     parser = ArgumentParser()
     parser.add_argument('--config', type=FileType(mode='r'), default=None)
-    parser.add_argument('--model_dir', type=str, default='workdir/test_score', help='Path to folder with trained score model and hyperparameters')
+    parser.add_argument('--model_dir', type=str, default='workdir/v1.1/test_score', help='Path to folder with trained score model and hyperparameters')
     parser.add_argument('--ckpt', type=str, default='best_ema_inference_epoch_model.pt', help='Checkpoint to use inside the folder')
     parser.add_argument('--confidence_model_dir', type=str, default=None, help='Path to folder with trained confidence model and hyperparameters')
     parser.add_argument('--confidence_ckpt', type=str, default='best_model_epoch75.pt', help='Checkpoint to use inside the folder')
@@ -72,6 +90,8 @@ if __name__ == '__main__':
     parser.add_argument('--project', type=str, default='ligbind_inf', help='')
     parser.add_argument('--out_dir', type=str, default=None, help='Where to save results to')
     parser.add_argument('--batch_size', type=int, default=40, help='Number of poses to sample in parallel')
+    parser.add_argument('--slurm_array_idx', type=int, default=None)
+    parser.add_argument('--slurm_array_task_count', type=int, default=None)
 
     parser.add_argument('--old_score_model', action='store_true', default=False, help='')
     parser.add_argument('--old_confidence_model', action='store_true', default=True, help='')
@@ -85,9 +105,10 @@ if __name__ == '__main__':
     parser.add_argument('--complexes_save_path', type=str, default=None, help='')
 
     parser.add_argument('--dataset', type=str, default='moad', help='')
-    parser.add_argument('--cache_path', type=str, default='data/cache', help='Folder from where to load/restore cached dataset')
+    parser.add_argument('--cache_path', type=str, default='eval_cache', help='Folder from where to load/restore cached dataset')
     parser.add_argument('--data_dir', type=str, default='../../ligbind/data/BindingMOAD_2020_ab_processed_biounit/', help='Folder containing original structures')
     parser.add_argument('--split_path', type=str, default='data/BindingMOAD_2020_ab_processed/splits/val.txt', help='Path of file defining the split')
+    parser.add_argument('--confidence_cache_path', type=str, default='data/cache', help='Folder from where to load/restore cached dataset')
 
     parser.add_argument('--no_model', action='store_true', default=False, help='Whether to return seed conformer without running model')
     parser.add_argument('--no_random', action='store_true', default=False, help='Whether to add randomness in diffusion steps')
@@ -115,6 +136,7 @@ if __name__ == '__main__':
     parser.add_argument('--protein_file', type=str, default='protein_processed', help='')
     parser.add_argument('--unroll_clusters', action='store_true', default=True, help='')
     parser.add_argument('--ligand_file', type=str, default='ligand', help='')
+    parser.add_argument('--smile_file', type=str, default=None, help='')
     parser.add_argument('--remove_pdbbind', action='store_true', default=False, help='')
     parser.add_argument('--split', type=str, default='val', help='')
     parser.add_argument('--limit_failures', type=float, default=5, help='')
@@ -143,6 +165,8 @@ if __name__ == '__main__':
     parser.add_argument('--gnina_poses_to_optimize', type=int, default=1)
 
     parser.add_argument('--crop_beyond', type=float, default=None, help='')
+    parser.add_argument('--num_dataloader_workers', type=int, default=1)
+    parser.add_argument('--dataloader_prefetch_factor', type=int, default=1)
 
     args = parser.parse_args()
     if args.config:
@@ -165,6 +189,29 @@ if __name__ == '__main__':
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
         torch.set_num_threads(threads)
+
+    # Download models if they don't exist locally
+    if not os.path.exists(args.model_dir):
+        print(f"Models not found. Downloading")
+        remote_urls = REMOTE_URLS
+        downloaded_successfully = False
+        for remote_url in remote_urls:
+            try:
+                print(f"Attempting download from {remote_url}")
+                files_downloaded = download_and_extract(remote_url, os.path.dirname(args.model_dir))
+                if not files_downloaded:
+                    print(f"Download from {remote_url} failed.")
+                    continue
+                print(f"Downloaded and extracted {len(files_downloaded)} files from {remote_url}")
+                downloaded_successfully = True
+                # Once we have downloaded the models, we can break the loop
+                break
+            except Exception as e:
+                print(traceback.format_exc(), flush = True)
+                pass
+
+        if not downloaded_successfully:
+            raise Exception(f"Models not found locally and failed to download them from {remote_urls}")
 
     if args.out_dir is None: args.out_dir = f'inference_out_dir_not_specified/{args.run_name}'
     os.makedirs(args.out_dir, exist_ok=True)
@@ -190,6 +237,10 @@ if __name__ == '__main__':
             score_model_args.esm_embeddings_path = None
         if args.force_fixed_center_conv:
             score_model_args.not_fixed_center_conv = False
+        if not hasattr(score_model_args, 'DDP'):
+            score_model_args.DDP = False
+        if hasattr(args, 'cache_path'):
+            score_model_args.cache_path = args.cache_path
     if args.confidence_model_dir is not None:
         with open(f'{args.confidence_model_dir}/model_parameters.yml') as f:
             confidence_args = Namespace(**yaml.full_load(f))
@@ -203,36 +254,42 @@ if __name__ == '__main__':
             confidence_args.esm_embeddings_path = None
         if not hasattr(confidence_args, 'num_classification_bins'):
             confidence_args.num_classification_bins = 2
+        if not hasattr(confidence_args, 'DDP'):
+            confidence_args.DDP = False
+        if hasattr(args, 'confidence_cache_path'):
+            confidence_args.cache_path = args.confidence_cache_path
 
     if args.num_cpu is not None:
         torch.set_num_threads(args.num_cpu)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     print(f"DiffDock will run on {device}")
     test_dataset = get_dataset(args, score_model_args)
-    test_loader = DataLoader(dataset=test_dataset, batch_size=1, shuffle=False)
     if args.confidence_model_dir is not None:
         if not (confidence_args.use_original_model_cache or confidence_args.transfer_weights):
             # if the confidence model uses the same type of data as the original model then we do not need this dataset and can just use the complexes
             print('HAPPENING | confidence model uses different type of graphs than the score model. Loading (or creating if not existing) the data for the confidence model now.')
             confidence_test_dataset = get_dataset(args, confidence_args, confidence=True)
-            confidence_complex_dict = {d.name: d for d in confidence_test_dataset}
+#            confidence_complex_dict = {d.name: d for d in confidence_test_dataset}
 
     t_to_sigma = partial(t_to_sigma_compl, args=score_model_args)
 
     if not args.no_model:
         model = get_model(score_model_args, device, t_to_sigma=t_to_sigma, no_parallel=True, old=args.old_score_model)
         state_dict = torch.load(f'{args.model_dir}/{args.ckpt}', map_location=torch.device('cpu'))
-        if args.ckpt == 'last_model.pt':
+        if 'ema' in args.ckpt:
             model_state_dict = state_dict['model']
             ema_weights_state = state_dict['ema_weights']
+            model_state_dict = state_dict_fixup(model_state_dict)
             model.load_state_dict(model_state_dict, strict=True)
             ema_weights = ExponentialMovingAverage(model.parameters(), decay=score_model_args.ema_rate)
             ema_weights.load_state_dict(ema_weights_state, device=device)
             ema_weights.copy_to(model.parameters())
         else:
+            state_dict = state_dict_fixup(state_dic)
             model.load_state_dict(state_dict, strict=True)
-            model = model.to(device)
-            model.eval()
+        model = model.to(device)
+        model.eval()
         if args.confidence_model_dir is not None:
             if confidence_args.transfer_weights:
                 with open(f'{confidence_args.original_model_dir}/model_parameters.yml') as f:
@@ -319,14 +376,23 @@ if __name__ == '__main__':
         # key is complex_name, value is the gnina metrics for all samples
         gnina_metrics = {}
 
-    for idx, orig_complex_graph in tqdm(enumerate(test_loader)):
+    failures = 0
+    skipped = 0
+
+    combined_datasets = CombineLazyPDBBindSet(test_dataset, confidence_test_dataset)
+    loader = DataLoader(combined_datasets, batch_size=1, collate_fn=lambda batch: [x for x in batch if x is not None], num_workers=args.num_dataloader_workers, prefetch_factor=args.dataloader_prefetch_factor)
+
+    for batch in tqdm(loader):
+        if not batch:
+            continue
+        _orig_complex_graph, _confidence_graph = batch[0]
+        if not _orig_complex_graph or not _confidence_graph:
+            continue
+        orig_complex_graph = next(iter(GeometricDataLoader([_orig_complex_graph], batch_size=len(_orig_complex_graph))))
+        confidence_graph = next(iter(GeometricDataLoader([_confidence_graph], batch_size=len(_confidence_graph))))
+
         torch.cuda.empty_cache()
 
-        if confidence_model is not None and not (confidence_args.use_original_model_cache or confidence_args.transfer_weights) \
-                and orig_complex_graph.name[0] not in confidence_complex_dict.keys():
-            skipped += 1
-            print(f"HAPPENING | The confidence dataset did not contain {orig_complex_graph.name[0]}. We are skipping this complex.")
-            continue
         success = 0
         bs = args.batch_size
         while 0 >= success > -args.limit_failures:
@@ -341,7 +407,6 @@ if __name__ == '__main__':
                                    args.pocket_knowledge, args.pocket_cutoff,
                                    initial_noise_std_proportion=args.initial_noise_std_proportion,
                                    choose_residue=args.choose_residue)
-
 
                 pdb = None
                 if args.save_visualisation:
@@ -360,8 +425,7 @@ if __name__ == '__main__':
                 if not args.no_model:
                     if confidence_model is not None and not (
                             confidence_args.use_original_model_cache or confidence_args.transfer_weights):
-                        confidence_data_list = [copy.deepcopy(confidence_complex_dict[orig_complex_graph.name[0]]) for _ in
-                                               range(N)]
+                        confidence_data_list = [confidence_graph for _ in range(N)]
                     else:
                         confidence_data_list = None 
 
@@ -395,9 +459,8 @@ if __name__ == '__main__':
                         orig_ligand_pos = np.array([pos[filterHs] - orig_complex_graph.original_center.cpu().numpy() for pos in orig_complex_graph['ligand'].orig_pos[0]])
                     else:
                         orig_ligand_pos = np.array([pos[filterHs] - orig_complex_graph.original_center.cpu().numpy() for pos in [orig_complex_graph['ligand'].orig_pos[0]]])
-                    print('Found ', len(orig_ligand_pos), ' ground truth poses')
+                    print('Found ', len(orig_ligand_pos), ' ground truth poses', flush = True)
                 else:
-                    print('default path')
                     orig_ligand_pos = np.expand_dims(
                         orig_complex_graph['ligand'].orig_pos[filterHs] - orig_complex_graph.original_center.cpu().numpy(),
                         axis=0)
@@ -407,7 +470,7 @@ if __name__ == '__main__':
 
                 # Use gnina to minimize energy for predicted ligands.
                 if args.gnina_minimize:
-                    print('Running gnina on all predicted ligand positions for energy minimization.')
+                    print('Running gnina on all predicted ligand positions for energy minimization.', flush = True)
                     gnina_rmsds, gnina_scores = [], []
                     lig = copy.deepcopy(orig_complex_graph.mol[0])
                     positions = np.asarray([complex_graph['ligand'].pos.cpu().numpy() for complex_graph in data_list])
@@ -432,7 +495,7 @@ if __name__ == '__main__':
                             try:
                                 rmsd = get_symmetry_rmsd(mol, orig_ligand_pos[i], gnina_ligand_pos, gnina_mol)
                             except Exception as e:
-                                print("Using non corrected RMSD because of the error:", e)
+                                print("Using non corrected RMSD because of the error:", e, flush = True)
                                 rmsd = np.sqrt(((gnina_ligand_pos - orig_ligand_pos[i]) ** 2).sum(axis=1).mean(axis=0))
                             rmsds.append(rmsd)
                         rmsds = np.asarray(rmsds)
@@ -452,7 +515,7 @@ if __name__ == '__main__':
                     try:
                         rmsd = get_symmetry_rmsd(mol, orig_ligand_pos[i], [l for l in ligand_pos])
                     except Exception as e:
-                        print("Using non corrected RMSD because of the error:", e)
+                        print("Using non corrected RMSD because of the error:", e, flush = True)
                         rmsd = np.sqrt(((ligand_pos - orig_ligand_pos[i]) ** 2).sum(axis=2).mean(axis=1))
                     rmsds.append(rmsd)
                 rmsds = np.asarray(rmsds)
@@ -468,11 +531,11 @@ if __name__ == '__main__':
                     re_order = np.argsort(confidence)[::-1]
                     print(orig_complex_graph['name'], ' rmsd', np.around(rmsd, 1)[re_order], ' centroid distance',
                           np.around(centroid_distance, 1)[re_order], ' confidences ', np.around(confidence, 4)[re_order],
-                          (' gnina rmsd ' + str(np.around(gnina_rmsds, 1))) if args.gnina_minimize else '')
+                          (' gnina rmsd ' + str(np.around(gnina_rmsds, 1))) if args.gnina_minimize else '', flush = True)
                     confidences_list.append(confidence)
                 else:
                     print(orig_complex_graph['name'], ' rmsd', np.around(rmsd, 1), ' centroid distance',
-                          np.around(centroid_distance, 1))
+                          np.around(centroid_distance, 1), flush = True)
                 centroid_distances_list.append(centroid_distance)
 
                 self_distances = np.linalg.norm(ligand_pos[:, :, None, :] - ligand_pos[:, None, :, :], axis=-1)
@@ -496,7 +559,8 @@ if __name__ == '__main__':
                 rmsds_list.append(rmsd)
                 success = 1
             except Exception as e:
-                print("Failed on", orig_complex_graph["name"], e)
+                print("Failed on", orig_complex_graph["name"], e, flush = True)
+                print(traceback.format_exc(), flush = True)
                 exc_type, exc_obj, exc_tb = sys.exc_info()
                 fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
                 print(exc_type, fname, exc_tb.tb_lineno)
@@ -556,14 +620,17 @@ if __name__ == '__main__':
             names = np.array(names_list)
 
         run_times = np.array(run_times)
-        np.save(f'{args.out_dir}/{overlap}min_self_distances.npy', min_self_distances)
-        np.save(f'{args.out_dir}/{overlap}rmsds.npy', rmsds)
-        np.save(f'{args.out_dir}/{overlap}centroid_distances.npy', centroid_distances)
-        np.save(f'{args.out_dir}/{overlap}confidences.npy', confidences)
-        np.save(f'{args.out_dir}/{overlap}run_times.npy', run_times)
-        np.save(f'{args.out_dir}/{overlap}complex_names.npy', np.array(names))
-        np.save(f'{args.out_dir}/{overlap}gnina_rmsds.npy', gnina_rmsds)
-        np.save(f'{args.out_dir}/{overlap}gnina_score.npy', gnina_score)
+        run_suffix = ''
+        if args.slurm_array_task_count:
+            run_suffix = '_' + str(args.slurm_array_idx)
+        np.save(f'{args.out_dir}/{overlap}min_self_distances{run_suffix}.npy', min_self_distances)
+        np.save(f'{args.out_dir}/{overlap}rmsds{run_suffix}.npy', rmsds)
+        np.save(f'{args.out_dir}/{overlap}centroid_distances{run_suffix}.npy', centroid_distances)
+        np.save(f'{args.out_dir}/{overlap}confidences{run_suffix}.npy', confidences)
+        np.save(f'{args.out_dir}/{overlap}run_times{run_suffix}.npy', run_times)
+        np.save(f'{args.out_dir}/{overlap}complex_names{run_suffix}.npy', np.array(names))
+        np.save(f'{args.out_dir}/{overlap}gnina_rmsds{run_suffix}.npy', gnina_rmsds)
+        np.save(f'{args.out_dir}/{overlap}gnina_score{run_suffix}.npy', gnina_score)
 
         performance_metrics.update({
             f'{overlap}run_times_std': run_times.std().__round__(2),

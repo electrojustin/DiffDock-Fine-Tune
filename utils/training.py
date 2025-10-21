@@ -4,6 +4,7 @@ from rdkit.Chem import RemoveAllHs
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 import torch
+import traceback
 
 from confidence.dataset import ListDataset
 from utils import so3, torus
@@ -268,7 +269,18 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
     meter = AverageMeter(['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
                           'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'])
 
-    for data in tqdm(loader, total=len(loader)):
+    #for data in tqdm(loader, total=len(loader)):
+    num_nan = 0
+    for data_idx, data in enumerate(loader):
+        had_error = False
+        if not data:
+            print('Idx ' + str(data_idx) + ' failed preprocess', flush=True)
+            continue
+        if data['receptor'].pos.shape[0] == 0:
+            print(data['name'][0] + ' was cropped!', flush=True)
+            continue
+        if data_idx % 10 == 0:
+            print('Train idx ' + str(data_idx) + ', receptor size ' + str(data['receptor'].pos.shape[0]) + ' residues', flush=True)
         if isinstance(data, list):
             ## is data is passed in as list -> then the model is a DataParallel model
             if device.type == 'cuda' and len(data) == 1 or device.type == 'cpu' and data.num_graphs == 1:
@@ -283,62 +295,94 @@ def train_epoch(model, loader, optimizer, device, t_to_sigma, loss_fn, ema_weigh
         try:
             tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
             loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, device=device)
-            if loss_tuple is None:
-                print("None loss tuple, skipping")
-                continue
             loss = loss_tuple[0]
 
             if torch.any(torch.isnan(loss)):
-                names = data.name if device.type == 'cpu' else [d.name for d in data]
-                print("Nan loss, skipping batch with complexes", names)
-                continue
+                names = [d.name for d in data] if isinstance(data, list) else data.name
+                print("Nan loss, skipping batch with complexes " + str(names) + ' (idx ' + str(data_idx) + ')', flush=True)
+                loss = loss.zero_()
+                had_error = True
+                num_nan += 1
+                #continue
+
             loss.backward()
-            optimizer.step()
-            if ema_weights is not None: ema_weights.update(model.parameters())
-            meter.add([loss.cpu().detach(), *loss_tuple[1:]])
             
         except RuntimeError as e:
             if 'out of memory' in str(e):
-                print('| WARNING: ran out of memory, skipping batch')
+                print('| WARNING: ran out of memory, skipping batch ' + str(data_idx), flush=True)
+
                 for p in model.parameters():
                     if p.grad is not None:
                         del p.grad  # free some memory
                 torch.cuda.empty_cache()
-                continue
+                had_error = True
             elif 'Input mismatch' in str(e):
-                print('| WARNING: weird torch_cluster error, skipping batch')
+                print('| WARNING: weird torch_cluster error, skipping batch ' + str(data_idx), flush=True)
                 for p in model.parameters():
                     if p.grad is not None:
                         del p.grad  # free some memory
                 torch.cuda.empty_cache()
-                continue
+                had_error = True
             else:
                 #raise e
-                print(e)
-                continue
-            
-    return meter.summary()
+                print(e, flush=True)
+                print(traceback.format_exc(), flush=True)
+                for p in model.parameters():
+                    if p.grad is not None:
+                        del p.grad  # free some memory
+                torch.cuda.empty_cache()
+                had_error = True
+        if had_error:
+            optimizer.zero_grad()
+        optimizer.step()
+        if ema_weights is not None: ema_weights.update(model.parameters())
+        if not had_error:
+            meter.add([loss.cpu().detach(), *loss_tuple[1:]])
+
+    out = meter.summary()
+    out["num_nan"] = num_nan
+    return out
 
 
 def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=False):
     model.eval()
     meter = AverageMeter(['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
-                          'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'],
+                          'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss',
+                          'num_nan'],
                          unpooled_metrics=True)
-
+    num_nan = 0
     if test_sigma_intervals:
         meter_all = AverageMeter(
             ['loss', 'tr_loss', 'rot_loss', 'tor_loss', 'backbone_loss', 'sidechain_loss',
-             'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss'],
+             'tr_base_loss', 'rot_base_loss', 'tor_base_loss', 'backbone_base_loss', 'sidechain_base_loss',
+             'num_nan'],
             unpooled_metrics=True, intervals=10)
-    for data in tqdm(loader, total=len(loader)):
+    for data_idx, data in enumerate(loader):
+        has_error = False
+        if data_idx % 10 == 0:
+            print('Test idx ' + str(data_idx) + ', receptor size ' + str(data['receptor'].pos.shape[0]) + ' residues', flush=True)
+        if not data or data['receptor'].pos.shape[0] == 0:
+            continue
         try:
-            data = data.to(device)
+            if isinstance(data, list):
+                ## is data is passed in as list -> then the model is a DataParallel model
+                if device.type == 'cuda' and len(data) == 1 or device.type == 'cpu' and data.num_graphs == 1:
+                    print("Skipping batch of size 1 since otherwise batchnorm would not work.")
+                    continue
+                data = [d.to(device) for d in data] if device.type == 'cuda' else data
+            else:
+                ## else it is a regular model/DistributedDataParallel model
+                data = data.to(device)
             with torch.no_grad():
                 tr_pred, rot_pred, tor_pred, sidechain_pred = model(data)
             loss_tuple = loss_fn(tr_pred, rot_pred, tor_pred, sidechain_pred, data=data, t_to_sigma=t_to_sigma, apply_mean=False, device=device)
-            if loss_tuple is None: continue
-            meter.add([loss_tuple[0].cpu().detach(), *loss_tuple[1:]])
+            if loss_tuple is None or torch.any(torch.isnan(loss_tuple[0])):
+                has_error = True
+                loss_tuple[0].zero_()
+                num_nan += 1
+                print('Nan detected evaluating complexes ' + str(data.name) + ' (batch idx ' + str(data_idx) + ')')
+            else:
+                meter.add([loss_tuple[0].cpu().detach(), *loss_tuple[1:]])
 
             if test_sigma_intervals > 0:
                 complex_t_tr, complex_t_rot, complex_t_tor = [torch.cat([data[i].complex_t[noise_type] for i in range(len(data))]) for
@@ -348,8 +392,7 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
                 sigma_index_tor = torch.round(complex_t_tor.cpu() * (10 - 1)).long()
                 meter_all.add([loss_tuple[0].cpu().detach(), *loss_tuple[1:]],
                     [sigma_index_tr, sigma_index_tr, sigma_index_rot, sigma_index_tor, sigma_index_tr, sigma_index_tr,
-                     sigma_index_tr, sigma_index_rot, sigma_index_tor, sigma_index_tr, sigma_index_tr])
-
+                     sigma_index_tr, sigma_index_rot, sigma_index_tor, sigma_index_tr, sigma_index_tr])                    
         except RuntimeError as e:
             if 'out of memory' in str(e):
                 print('| WARNING: ran out of memory, skipping batch')
@@ -372,21 +415,27 @@ def test_epoch(model, loader, device, t_to_sigma, loss_fn, test_sigma_intervals=
 
     out = meter.summary()
     if test_sigma_intervals > 0: out.update(meter_all.summary())
+    out["num_nan"] = num_nan
     return out
 
 
-def inference_epoch_fix(model, complex_graphs, device, t_to_sigma, args):
+def inference_epoch_fix(model, loader, device, t_to_sigma, args):
+    model.eval()
     t_schedule = get_t_schedule(sigma_schedule='expbeta', inference_steps=args.inference_steps,
                                 inf_sched_alpha=1, inf_sched_beta=1)
     tr_schedule, rot_schedule, tor_schedule = t_schedule, t_schedule, t_schedule
-
-    dataset = ListDataset(complex_graphs)
-    loader = DataLoader(dataset=dataset, batch_size=1, shuffle=False)
     rmsds, min_rmsds = [], []
+    centroids, min_centroids = [], []
 
-    for orig_complex_graph in tqdm(loader):
+    for idx, orig_complex_graph in enumerate(loader):
+        print('Inference idx ' + str(idx), flush=True)
+        if idx >= args.num_inference_complexes:
+            break
+        if not orig_complex_graph or orig_complex_graph['receptor'].pos.shape[0] == 0:
+            continue
         data_list = [copy.deepcopy(orig_complex_graph) for _ in range(args.inference_samples)]
         randomize_position(data_list, args.no_torsion, False, args.tr_sigma_max)
+        data_list = [d.to(device) for d in data_list]
 
         predictions_list = None
         failed_convergence_counter = 0
@@ -397,13 +446,17 @@ def inference_epoch_fix(model, complex_graphs, device, t_to_sigma, args):
                                                          tr_schedule=tr_schedule, rot_schedule=rot_schedule,
                                                          tor_schedule=tor_schedule,
                                                          device=device, t_to_sigma=t_to_sigma, model_args=args,
-                                                         t_schedule=t_schedule)
+                                                         t_schedule=t_schedule,
+                                                         temp_sampling=[args.temp_sampling_tr, args.temp_sampling_rot, args.temp_sampling_tor] if args.inf_temp else 1.0,
+                                                         temp_psi=[args.temp_psi_tr, args.temp_psi_rot, args.temp_psi_tor] if args.inf_temp else 0.0 ,
+                                                         temp_sigma_data=[args.temp_sigma_data_tr, args.temp_sigma_data_rot, args.temp_sigma_data_tor] if args.inf_temp else 0.5)
             except Exception as e:
                 failed_convergence_counter += 1
                 if failed_convergence_counter > 5:
                     print('failed 5 times - skipping the complex')
                     break
-                print("Exception while running inference on complex:", e)
+                print(f"Exception while running inference on complex: {idx}", e)
+                print(traceback.format_exc())
         if failed_convergence_counter > 5:
             rmsds.extend([100] * args.inference_samples)
             min_rmsds.append(100)
@@ -431,6 +484,7 @@ def inference_epoch_fix(model, complex_graphs, device, t_to_sigma, args):
             continue
         mol = RemoveAllHs(orig_complex_graph.mol[0])
         complex_rmsds = []
+        complex_centroids = []
         for i in range(len(orig_ligand_pos)):
             try:
                 rmsd = get_symmetry_rmsd(mol, orig_ligand_pos[i], [l for l in ligand_pos])
@@ -438,16 +492,30 @@ def inference_epoch_fix(model, complex_graphs, device, t_to_sigma, args):
                 print("Using non corrected RMSD because of the error:", e)
                 rmsd = np.sqrt(((ligand_pos - orig_ligand_pos[i]) ** 2).sum(axis=2).mean(axis=1))
             complex_rmsds.append(rmsd)
+            centroid = np.sqrt(((ligand_pos.mean(axis=1) - orig_ligand_pos[i].mean(axis=0)) ** 2).sum(axis=1))
+            complex_centroids.append(centroid)
         complex_rmsds = np.asarray(complex_rmsds)
         rmsd = np.min(complex_rmsds, axis=0)
-        
         rmsds.extend([r for r in rmsd])
         min_rmsds.append(rmsd.min(axis=0))
+        complex_centroids = np.asarray(complex_centroids)
+        centroid = np.min(complex_centroids, axis=0)
+        centroids.extend([c for c in centroid])
+        min_centroids.append(centroid.min(axis=0))
 
     rmsds = np.array(rmsds)
     min_rmsds = np.array(min_rmsds)
-    losses = {'rmsds_lt2': (100 * (rmsds < 2).sum() / len(rmsds)),
+    centroids = np.array(centroids)
+    min_centroids = np.array(min_centroids)
+    losses = {'rmsd_median': np.median(rmsds),
+              'centroid_median': np.median(centroids),
+              'rmsds_lt2': (100 * (rmsds < 2).sum() / len(rmsds)),
               'rmsds_lt5': (100 * (rmsds < 5).sum() / len(rmsds)),
+              'centroid_lt2': (100 * (centroids < 2).sum() / len(centroids)),
+              'centroid_lt5': (100 * (centroids < 5).sum() / len(centroids)),
               'min_rmsds_lt2': (100 * (min_rmsds < 2).sum() / len(min_rmsds)),
-              'min_rmsds_lt5': (100 * (min_rmsds < 5).sum() / len(min_rmsds)),}
+              'min_rmsds_lt5': (100 * (min_rmsds < 5).sum() / len(min_rmsds)),
+              'min_centroid_lt2': (100 * (min_centroids < 2).sum() / len(min_centroids)),
+              'min_centroid_lt5': (100 * (min_centroids < 5).sum() / len(min_centroids)),
+              }
     return losses

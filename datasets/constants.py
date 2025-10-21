@@ -1,5 +1,18 @@
 # Significant contribution from Ben Fry and Nick Polizzi
 
+# Uses positive entries in BLOSUM62 for hydrophillic, non-aromatic amino acids
+common_mutants = {'S': ['S', 'T', 'A', 'N'],
+                  'T': ['T', 'S'],
+                  'A': ['A', 'S'],
+                  'N': ['N', 'S', 'D', 'H'],
+                  'D': ['D', 'E', 'N'],
+                  'E': ['E', 'D', 'Q', 'K'],
+                  'Q': ['Q', 'E', 'R', 'K'],
+                  'K': ['K', 'E', 'Q', 'R'],
+                  'R': ['R', 'Q', 'K'],
+                  'H': ['H', 'N']
+                  }
+
 three_to_one = {'ALA':	'A',
                 'ARG':	'R',
                 'ASN':	'N',

@@ -39,6 +39,8 @@ class NoiseTransform(BaseTransform):
         self.time_independent = time_independent
 
     def __call__(self, data):
+        if data is None:
+            return None
         t_tr, t_rot, t_tor, t = self.get_time()
         return self.apply_noise(data, t_tr, t_rot, t_tor, t)
 

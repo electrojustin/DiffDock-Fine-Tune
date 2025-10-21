@@ -1,244 +1,81 @@
-# DiffDock: Diffusion Steps, Twists, and Turns for Molecular Docking
-[![Open in HuggingFace](https://huggingface.co/datasets/huggingface/badges/raw/main/open-in-hf-spaces-sm.svg)](https://huggingface.co/spaces/reginabarzilaygroup/DiffDock-Web)
+# DiffDock Fine Tuning 
 
+This is a fork of DiffDock-L with performance optimizations and wrapper scripts designed to make fine-tuning easier.
 
-![Alt Text](overview.png)
+The original DiffDock-L source can be found [here](https://github.com/gcorso/DiffDock/).
 
-### [Original paper on arXiv](https://arxiv.org/abs/2210.01776)
+## System Requirements
 
-Implementation of DiffDock, state-of-the-art method for molecular docking, by Gabriele Corso*, Hannes Stark*, Bowen Jing*, Regina Barzilay and Tommi Jaakkola.
-This repository contains code and instructions to run the method. Since 2024, Jacob Silterra has been leading the effort to maintain and improve the code.
-If you have any question, feel free to open an issue or reach out to us: [gcorso@mit.edu](gcorso@mit.edu) and [silterra@mit.edu](silterra@mit.edu).
+The wrapper scripts in this repo are designed to run on an HPC using Slurm for job management and Singularity for container management. The Slurm installation must have a cuda module and an openbabel module.
 
-**Update February 2024:** We have released DiffDock-L, a new version of DiffDock that provides a significant improvement in performance and generalization capacity (see the description of the new version in [our new paper](https://arxiv.org/abs/2402.18396)). By default the repository now runs the new model, please use GitHub commit history to run the original DiffDock model. Further we now provide instructions for Docker and to set up your own local UI interface.
+The HPC these scripts were tested on have general compute nodes with 48+ CPU cores, and GPU nodes with 4 GPUs. Both types of nodes have 120+GB of general RAM available, and each GPU in the GPU nodes have 80GB of VRAM. If your HPC's general compute nodes have fewer CPUs per node, it may be worth editing `cpus-per-task` in `preprocess.sbatch` and `num_dataloader_workers` in `preprocess.sh` accordingly. If your HPC's GPU nodes have a different number of attached GPUs, it may be necessary to edit `tasks` and `gres` in `train_diffdock.sbatch` accordingly.
 
-You can also try out the model on [Hugging Face Spaces](https://huggingface.co/spaces/reginabarzilaygroup/DiffDock-Web).
+## Obtaining Pretrained Model
 
+This repository is designed for fine-tuning an existing DiffDock-L model rather than training a whole new model from scratch, which can be very computationally expensive. The original authors of DiffDock-L have kindly published their model [here](https://github.com/gcorso/DiffDock/releases/download/v1.1/diffdock_models.zip), which is suitable for this purpose.
 
+## Environmental Setup
 
-<details><summary><b>Citation</b></summary>
+DiffDock requires a Singularity container with an appropriate Conda environment installed.
 
-If you use this code or the models in your research, please cite the following paper:
+For instructions to setup a Conda environment inside of a Singularity container, see [here](https://sites.google.com/nyu.edu/nyu-hpc/hpc-systems/greene/software/singularity-with-miniconda), or check with your HPC administrator.
 
-```bibtex
-    @inproceedings{corso2023diffdock,
-        title={DiffDock: Diffusion Steps, Twists, and Turns for Molecular Docking}, 
-        author = {Corso, Gabriele and Stärk, Hannes and Jing, Bowen and Barzilay, Regina and Jaakkola, Tommi},
-        booktitle={International Conference on Learning Representations (ICLR)},
-        year={2023}
-    }
-```
-
-If you use the latest version, DiffDock-L, please also cite the following paper:
-
-```bibtex
-    @inproceedings{corso2024discovery,
-        title={Deep Confident Steps to New Pockets: Strategies for Docking Generalization},
-        author={Corso, Gabriele and Deng, Arthur and Polizzi, Nicholas and Barzilay, Regina and Jaakkola, Tommi},
-        booktitle={International Conference on Learning Representations (ICLR)},
-        year={2024}
-    }
-
-```
-</details>
-
-<details open><summary><b>Table of contents</b></summary>
-
-- [Usage](#usage)
-  - [Quick Start](#quickstart)
-  - [Setup Environment](#environment)
-  - [Docking Prediction](#inference)
-- [FAQ](#faq)
-- [Datasets](#datasets)
-- [Replicate results](#replicate)
-- [Citations](#citations)
-- [License](#license)
-- [Acknowledgements](#acknowledgements)
-</details>
-
-
-
-## Usage  <a name="usage"></a>
-
-### Quick Start  <a name="quickstart"></a>
-
-You can directly try out the model without the need of installing anything through [Hugging Face Spaces](https://huggingface.co/spaces/reginabarzilaygroup/DiffDock-Web). Credit for the current HF interface goes to Jacob Silterra and for the previous version to Simon Duerr.
-
-### Setup Environment  <a name="environment"></a>
-
-We will set up the environment using [Anaconda](https://docs.anaconda.com/anaconda/install/index.html). Clone the
-current repo
-
-    git clone https://github.com/gcorso/DiffDock.git
-
-To set up an appropriate environment, navigate to the root of the repository and run the following commands:
+From inside the newly created Conda Singularity container, DiffDock's dependencies can be installed by running
 
     conda env create --file environment.yml
     conda activate diffdock
 
-See [conda documentation](https://conda.io/projects/conda/en/latest/commands/env/create.html) for more information.
+If using wandb.ai to track training progress, wandb can be set up by following just step 1 of the directions [here](https://wandb.ai/quickstart?utm_source=app-resource-center&utm_medium=app&utm_term=quickstart&product=models).
 
-### Using a Docker container
+## Dataset Preparation
 
-A Dockerfile is provided for building a container:
+These scripts have been written assuming a rather specific layout of the dataset being used for both training and testing. We assume that both training and testing data are co-located in the same directory, and the distrinction between training and testing is managed through "split files", which are just plain text documents containing lists of complexes. Complexes need to be named in the form `{PDB ID}_{CHAIN ID}_{LIGAND NAME}_{OPTIONAL SUFFIX}`. The dataset directory is assumed to contain sub-directories of each complex. Each sub-directory should contain 2 files: a protein file, and a ligand file. The protein files should contain the chain of the apo protein that actually binds to the ligand, while the ligand file should contain all the HETATM entries consisting of the ligand. The protein file should be named using the scheme `{PDB ID}_protein.pdb`, while the ligand file should be named like `{PDB ID}_ligand.pdb`. Each complex sub-directory should only contain one protein chain and one ligand, so higher order complexes need to be broken up accordingly. An example dataset directory might look like this:
 
-    docker build . -f Dockerfile -t diffdock
+    my_dataset/8ssp_A_627_510/8ssp_protein.pdb
+    my_dataset/8ssp_A_627_510/8ssp_ligand.pdb
+    my_dataset/8ssp_A_PDO_507/8ssp_protein.pdb
+    my_dataset/8ssp_A_PDO_507/8ssp_ligand.pdb
 
-Alternatively, you can use a pre-built container to run the code.
-First, download the container from Docker Hub:
+## ESM Embedding Preparation
 
-    docker pull rbgcsail/diffdock
+It's still necessary to generate ESM embeddings for all the proteins in the dataset. In order to do this, simply [follow the instructions outlined in the original DiffDock repo](https://github.com/gcorso/DiffDock/blob/main/README.md#generate-the-esm2-embeddings-for-the-proteins), *but skip the very last step, where it says to run esm_embeddings_to_pt.py*. This last step collates all the ESM embeddings in the dataset into one big file, which we have noticed can sometimes cause out of memory issues. Instead, we have modified the dataloader to process the ESM embeddings as individual files to keep the memory footprint down.
 
-Check if you have a GPU available
+## Configuration
 
-    docker run --rm --gpus all nvidia/cuda:11.7.1-devel-ubuntu22.04 nvidia-smi
+The last manual step in setting up DiffDock is to edit the configuration file, `config.sh`. This file contains a number of configuration variables (e.g. run names, input data paths, etc.) needed by downstream scripts. See the comments in `config.sh` for more details on what each variable means.
 
-Then, run the container:
+## Fine Tuning
 
-    docker run -it --gpus all --entrypoint /bin/bash rbgcsail/diffdock 
+### Preprocessing
 
-If you don't have a GPU, run (it will be significantly slower):
-    
-    docker run -it --entrypoint /bin/bash rbgcsail/diffdock 
+While the training code can theoretically be run with no preprocessing step and will simply perform preprocessing on the fly in the dataloader thread, in practice, some ligands with a large number of rotatable bonds will take excessive amounts of CPU time in the conformer matching stage. In order to make the most efficient use of GPU node time, we've shuffled much of the CPU expensive operations into a discrete preprocessing step that can be run on a general compute node.
 
-Inside the container
+Our preprocessing scripts also take care of the problem of hydrogenation. Because most crystal structures lack hydrogens, there are some ambiguities in how the ligand file should be loaded, and RDKit, the library DiffDock uses for this purpose, often makes mistakes. In particular, RDKit doesn't seem readily able to distinguish between aromatic and cycloalkane rings in PDB files, which can have a profound impact on model performance. Our preprocessing scripts take care of this problem by explicitly adding hydrogens to the ligand and converting it to an SDF file. `See preprocess_ligs.py` for details on the algorithm.
 
-    micromamba activate diffdock
+Once `config.sh` is properly set up, preprocessing should be  as easy as running
 
-You can now run the code as described below.
+    sbatch preprocess.sbatch
 
-### Docking Prediction  <a name="inference"></a>
+Note that this will attempt to launch a job on a 48 core general compute node. Please adjust `cpus-per-task` in `preprocess.sbatch` if this isn't feasible on your HPC.
 
-We support multiple input formats depending on whether you only want to make predictions for a single complex or for many at once.\
-The protein inputs need to be `.pdb` files or sequences that will be folded with ESMFold. The ligand input can either be a SMILES string or a filetype that RDKit can read like `.sdf` or `.mol2`.
+### Training
 
-For a single complex: specify the protein with `--protein_path protein.pdb` or `--protein_sequence GIQSYCTPPYSVLQDPPQPVV` and the ligand with `--ligand ligand.sdf` or `--ligand "COc(cc1)ccc1C#N"`
+After preprocessing is complete, training can be started by running
 
-For many complexes: create a csv file with paths to proteins and ligand files or SMILES. It contains as columns `complex_name` (name used to save predictions, can be left empty), `protein_path` (path to `.pdb` file, if empty uses sequence), `ligand_description` (SMILE or file path)  and `protein_sequence` (to fold with ESMFold in case the protein_path is empty).
-An example .csv is at `data/protein_ligand_example.csv` and you would use it with `--protein_ligand_csv protein_ligand_example.csv`.
+    sbatch train_diffdock.sbatch
 
-And you are ready to run inference:
+Note that this will attempt to launch a job on a GPU node with 4 open GPUs that lasts 2 days. Please adjust `tasks` and `gres` in `train_diffdock.sbatch` if your HPC does not have GPU nodes with 4 GPUs. Both variables must match the number of GPUs. Note that reducing this number from 4 will likely make training take longer.
 
-    python -m inference --config default_inference_args.yaml  --protein_ligand_csv data/protein_ligand_example.csv --out_dir results/user_predictions_small 
+## Testing
 
-When providing the `.pdb` files you can run DiffDock also on CPU, however, if possible, we recommend using a GPU as the model runs significantly faster. Note that the first time you run DiffDock on a device the program will precompute and store in cache look-up tables for SO(2) and SO(3) distributions (typically takes a couple of minutes), this won't be repeated in following runs.  
+### Running The Model
 
-## Graphical UI  <a name="gui"></a>
+Unlike the preprocessing and training scripts, the model eval script is designed to be run as an array job, since model evalutation is easily parallelizable in a way that doesn't require communication between workers. To evaluate the model's performance on the test dataset, simply run
 
-We provide a simple graphical user interface to run DiffDock on a single complex. To use it, run the following command:
+    sbatch --array=0-<number of workers> eval_model.sbatch
 
-    python app/main.py
+### Statistical Summary
 
-and navigate to http://localhost:7860 in your browser. 
+The eval script will create a "results" directory (configured in `config.sh`) containing PDB files depicting all the reverse diffusion steps of each docking run. It will also contain accuracy statistics from each eval worker, which can be aggregated using
 
-
-## FAQ  <a name="faq"></a>
-
-<details>
-<summary><b>How to interpret the DiffDock output confidence score?</b> </summary>
-It can be hard to interpret and compare confidence score of different complexes or different protein conformations, however, here a rough guideline that we typically use (c is the confidence score of the top pose):
-
- - c  > 0 high confidence
- - -1.5 < c < 0 moderate confidence
- - c < -1.5 low confidence
-
-This is assuming the complex is similar to what DiffDock saw in the training set i.e. a not too large drug-like molecule bound to medium size protein (1 or 2 chains) in a conformation that is similar to the bound one (e.g. if it comes from an homologue crystal structure). If you are dealing with a large ligand, a large protein complex and/or an app/unbound protein conformation you should shift these intervals down.
-</details>
-
-
-<details>
-<summary><b>Does DiffDock predict the binding affinity of the ligand to the protein?</b> </summary>
-No, DiffDock does not predict the binding affinity of the ligand to the protein. It predicts the 3D structure of the complex and it outputs a confidence score. This latter is a measure of the quality of the prediction, i.e. the model's confidence in its prediction of the binding structure. Several of our collaborators have seen this to have some correlation with binding affinity (intuitively if a ligand does not bind there will be no good pose), but it is not a direct measure of it. 
-
-We are working on better affinity prediction models, but in the meantime we recommend combining DiffDock's prediction with other tools such as docking function (e.g. GNINA), MM/GBSA or absolute binding free energy calculations. For this we recommend to first relax the DiffDock's structure predictions with the tool/force field used for the affinity prediction.
-</details>
-
-<details>
-<summary><b>Can I use DiffDock for protein-protein or protein-nucleic acid interactions?</b> </summary>
-While the program might not throw and error when fed with a large biomolecules as input, the model has only been designed, trained and tested for small molecule docking to proteins. Therefore, DiffDock is only likely to be able to deal with small peptides and nucleic acids as ligands, we do not recommend using DiffDock for the interactions of larger biomolecules. For other interactions we recommend looking at [DiffDock-PP](https://github.com/ketatam/DiffDock-PP) (rigid protein-protein interactions), [AlphaFold-Multimer](https://github.com/google-deepmind/alphafold) (flexible protein-protein interactions) or [RoseTTAFold2NA](https://github.com/uw-ipd/RoseTTAFold2NA) (protein-nucleic acid interactions).
-</details>
-
-## Datasets  <a name="datasets"></a>
-
-The files in `data` contain the splits used for the various datasets. Below instructions for how to download each of the different datasets used for training and evaluation:
-
- - **PDBBind:** download the processed complexes from [zenodo](https://zenodo.org/record/6408497), unzip the directory and place it into `data` such that you have the path `data/PDBBind_processed`.
- - **BindingMOAD:** download the processed complexes from [zenodo](https://zenodo.org/records/10656052) under `BindingMOAD_2020_processed.tar`, unzip the directory and place it into `data` such that you have the path `data/BindingMOAD_2020_processed`.
- - **DockGen:** to evaluate the performance of `DiffDock-L` with this repository you should use directly the data from BindingMOAD above. For other purposes you can download exclusively the complexes of the DockGen benchmark already processed (e.g. chain cutoff) from [zenodo](https://zenodo.org/records/10656052) downloading the `DockGen.tar` file.
- - **PoseBusters:** download the processed complexes from [zenodo](https://zenodo.org/records/8278563).
- - **van der Mers:** the protein structures used for the van der Mers data augmentation strategy were downloaded [here](https://files.ipd.uw.edu/pub/training_sets/pdb_2021aug02.tar.gz).
-
-
-## Replicate results  <a name="replicate"></a>
-
-If you are interested in replicating the results of the original DiffDock paper please checkout to the following commit:
-
-    git checkout v1.0
-
-Otherwise download the data and place it as described in the "Dataset" section above.
-
-### Generate the ESM2 embeddings for the proteins
-To avoid having to compute ESM embeddings every time we evaluate on a dataset we first cache them and then run the evaluation script. Here the instructions for generating these for PDBBind but it also applies similarly to the other benchmarks. First run the following command to save the list of ESM embeddings:
-
-    python datasets/esm_embedding_preparation.py
-
-Use the generated file `data/pdbbind_sequences.fasta` to generate the ESM2 language model embeddings using the library https://github.com/facebookresearch/esm by installing their repository and executing the following in their repository:
-
-    python scripts/extract.py esm2_t33_650M_UR50D pdbbind_sequences.fasta embeddings_output --repr_layers 33 --include per_tok --truncation_seq_length 4096
-
-This generates the `embeddings_output` directory which you have to copy into the `data` folder of our repository to have `data/embeddings_output`.
-Then run the command:
-
-    python datasets/esm_embeddings_to_pt.py
-
-### Run DiffDock-L
-
-For PDBBind: 
-
-    python -m evaluate  --config default_inference_args.yaml --split_path data/splits/timesplit_test --split_path data/splits/timesplit_test --batch_size 10 --esm_embeddings_path data/esm2_embeddings.pt --data_dir data/PDBBind_processed/ --tqdm --split test --chain_cutoff 10 --dataset pdbbind
-
-For DockGen:
-
-    python -m evaluate  --config default_inference_args.yaml --dataset moad --data_dir data/BindingMOAD_2020_processed --unroll_clusters --tqdm --split test --esm_embeddings_path data/moad_esm2_embeddings.pt --min_ligand_size 2 --moad_esm_embeddings_sequences_path data/moad_sequences_to_id.fasta --chain_cutoff 10 --batch_size 10 
-
-For PoseBusters:
-
-    python -m evaluate  --config default_inference_args.yaml --data_dir data/posebusters_benchmark_set --tqdm --dataset posebusters --split_path data/splits/posebusters_benchmark_set_ids.txt --esm_embeddings_path data/posebusters_ESM.pt --chain_cutoff 10 --batch_size 10 --protein_file protein --ligand_file ligands 
-
-To additionally save the .sdf files of the generated molecules, add the flag `--save_visualisation`.
-
-Note: the notebook `data/apo_alignment.ipynb` contains the code used to align the ESMFold-generated apo-structures to the holo-structures.
-
-## Citations <a name="citations"></a>
-If you use this code or the models in your research, please cite the following paper:
-
-```bibtex
-@inproceedings{corso2023diffdock,
-    title={DiffDock: Diffusion Steps, Twists, and Turns for Molecular Docking}, 
-    author = {Corso, Gabriele and Stärk, Hannes and Jing, Bowen and Barzilay, Regina and Jaakkola, Tommi},
-    booktitle={International Conference on Learning Representations (ICLR)},
-    year={2023}
-}
-```
-
-If you use the latest version of our model, DiffDock-L, please also cite the following paper:
-
-```bibtex
-@inproceedings{corso2024discovery,
-    title={Deep Confident Steps to New Pockets: Strategies for Docking Generalization},
-    author={Corso, Gabriele and Deng, Arthur and Polizzi, Nicholas and Barzilay, Regina and Jaakkola, Tommi},
-    booktitle={International Conference on Learning Representations (ICLR)},
-    year={2024}
-}
-```
-
-## License <a name="license"></a>
-The code and model weights are released under MIT license. See the [LICENSE](LICENSE) file for details.
-
-Components of the code of the [spyrmsd](spyrmsd) package by Rocco Meli (also MIT license) were integrated in the repo.
-
-## Acknowledgements <a name="acknowledgements"></a>
-We sincerely thank:
-* Jacob Silterra for his help with the publishing and deployment of the code.
-* Arthur Deng, Nicholas Polizzi and Ben Fry for their critical contributions to part of the code in this repository. 
-* Wei Lu and Rachel Wu for pointing out some issues with the code.
+    sbatch stats.sbatch

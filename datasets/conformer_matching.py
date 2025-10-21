@@ -82,4 +82,3 @@ def get_torsion_angles(mol):
             (n0[0], e[0], e[1], n1[0])
         )
     return torsions_list
-
