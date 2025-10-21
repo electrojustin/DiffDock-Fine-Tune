@@ -6,8 +6,7 @@ import setproctitle
 from datasets.dataloader import DataLoader, DataListLoader
 from datasets.moad import MOAD
 from datasets.pdb import PDBSidechain
-from datasets.pdbbind import NoiseTransform
-from datasets.lazy_pdbbind import LazyPDBBindSet
+from datasets.pdbbind import NoiseTransform, PDBBind
 from utils.utils import read_strings_from_txt
 
 class CombineLazyPDBBindSet(Dataset):
@@ -45,7 +44,7 @@ class CombineDatasets(Dataset):
         self.dataset1.add_complexes(new_complex_list)
 
 
-def construct_loader(args, t_to_sigma):
+def construct_loader(args, t_to_sigma, device):
     val_dataset2 = None
     transform = NoiseTransform(t_to_sigma=t_to_sigma, no_torsion=args.no_torsion,
                                all_atom=args.all_atoms, alpha=args.sampling_alpha, beta=args.sampling_beta,
@@ -133,12 +132,9 @@ def construct_loader(args, t_to_sigma):
                                unroll_clusters=args.unroll_clusters, root=args.moad_dir,
                                esm_embeddings_path=args.moad_esm_embeddings_path, require_ligand=True, **common_args)
 
-        loader_class = DataListLoader if torch.cuda.is_available() and not (args.no_parallel or args.DDP) else DataLoader
+        loader_class = DataListLoader if torch.cuda.is_available() else DataLoader
 
-    if args.DDP:
-        train_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(train_dataset), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('dataloader_'+str(worker_id)))
-        val_loader = DataLoader(prefetch_factor=args.dataloader_prefetch_factor, dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last, sampler=DistributedSampler(val_dataset, shuffle=False), collate_fn=lambda batch: [x for x in batch if x is not None], worker_init_fn=lambda worker_id: setproctitle.setproctitle('dataloader_'+str(worker_id)))
-    else:
-        train_loader = loader_class(prefetch_factor=args.dataloader_prefetch_factor, dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
-        val_loader = loader_class(prefetch_factor=args.dataloader_prefetch_factor, dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=False, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
+    train_loader = loader_class(dataset=train_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=True, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
+    val_loader = loader_class(dataset=val_dataset, batch_size=args.batch_size, num_workers=args.num_dataloader_workers, shuffle=False, pin_memory=args.pin_memory, drop_last=args.dataloader_drop_last)
     return train_loader, val_loader, val_dataset2
+
